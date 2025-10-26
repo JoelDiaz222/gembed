@@ -1,0 +1,31 @@
+[package]
+name = "gembed"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["staticlib"]
+
+[features]
+default = ["fastembed", "grpc"]
+grpc = ["prost", "tonic", "tokio", "tonic-prost", "tonic-prost-build"]
+
+[dependencies]
+anyhow = "1.0.100"
+fastembed = { git = "https://github.com/JoelDiaz222/fastembed-rs", optional = true }
+linkme = "0.3.35"
+prost = { version = "0.14.1", optional = true }
+tonic = { version = "0.14.2", optional = true }
+tokio = { version = "1.47.1", features = ["rt-multi-thread"], optional = true }
+tonic-prost = { version = "0.14.2", optional = true }
+
+[build-dependencies]
+tonic-prost-build = { version = "0.14.2", optional = true }
+
+[profile.release]
+debug = 0
+lto = "fat"
+opt-level = 3
+codegen-units = 1
+strip = "symbols"
+panic = "unwind"
