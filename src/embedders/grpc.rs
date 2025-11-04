@@ -1,7 +1,7 @@
 #![cfg(feature = "grpc")]
-use crate::embedders::grpc::tei::v1::embed_client::EmbedClient;
 use crate::embedders::grpc::tei::v1::EmbedBatchRequest;
-use crate::embedders::{EmbedMethod, Embedder, EMBEDDERS};
+use crate::embedders::grpc::tei::v1::embed_client::EmbedClient;
+use crate::embedders::{EMBEDDERS, Embedder};
 use anyhow::Result;
 use std::os::raw::c_float;
 use std::sync::LazyLock;
@@ -15,8 +15,8 @@ pub mod tei {
     }
 }
 
-#[unsafe(no_mangle)]
-pub static EMBED_METHOD_GRPC: i32 = EmbedMethod::Grpc as i32;
+pub static EMBED_METHOD_GRPC_ID: i32 = 1;
+pub static EMBED_METHOD_GRPC_NAME: &str = "grpc";
 
 static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_current_thread()
@@ -66,8 +66,12 @@ impl GrpcEmbedder {
 }
 
 impl Embedder for GrpcEmbedder {
-    fn method(&self) -> EmbedMethod {
-        EmbedMethod::Grpc
+    fn method_id(&self) -> i32 {
+        EMBED_METHOD_GRPC_ID
+    }
+
+    fn method_name(&self) -> &'static str {
+        EMBED_METHOD_GRPC_NAME
     }
 
     fn embed(&self, model_id: i32, text_slices: Vec<&str>) -> Result<(Vec<f32>, usize, usize)> {

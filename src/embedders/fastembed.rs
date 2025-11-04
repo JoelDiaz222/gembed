@@ -1,12 +1,12 @@
 #![cfg(feature = "fastembed")]
-use crate::embedders::{EmbedMethod, Embedder, EMBEDDERS};
+use crate::embedders::{EMBEDDERS, Embedder};
 use anyhow::Result;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::str::FromStr;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 
-#[unsafe(no_mangle)]
-pub static EMBED_METHOD_FASTEMBED: i32 = EmbedMethod::FastEmbed as i32;
+pub static EMBED_METHOD_FASTEMBED_ID: i32 = 0;
+pub static EMBED_METHOD_FASTEMBED_NAME: &str = "fastembed";
 
 thread_local! {
     static FASTEMBED_MODELS: RefCell<HashMap<i32, TextEmbedding>> = RefCell::new(HashMap::new());
@@ -29,8 +29,12 @@ impl FastEmbedder {
 }
 
 impl Embedder for FastEmbedder {
-    fn method(&self) -> EmbedMethod {
-        EmbedMethod::FastEmbed
+    fn method_id(&self) -> i32 {
+        EMBED_METHOD_FASTEMBED_ID
+    }
+
+    fn method_name(&self) -> &'static str {
+        EMBED_METHOD_FASTEMBED_NAME
     }
 
     fn embed(&self, model_id: i32, text_slices: Vec<&str>) -> Result<(Vec<f32>, usize, usize)> {
