@@ -1,6 +1,5 @@
 mod embedders;
-
-use crate::embedders::EmbedderRegistry;
+use crate::embedders::{EmbedderRegistry, Input, InputType};
 use anyhow::Result;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_float, c_int};
@@ -44,10 +43,14 @@ pub extern "C" fn validate_embedding_method(method: *const c_char) -> c_int {
     EmbedderRegistry::validate_method(method_str).unwrap_or(-1)
 }
 
-/// Validates model string for given method and returns model ID
-/// Returns -1 if non-existent or unallowed
+/// Validates model string for given method and input type, returns model ID
+/// Returns -1 if non-existent or doesn't support the input type
 #[unsafe(no_mangle)]
-pub extern "C" fn validate_embedding_model(method_id: c_int, model: *const c_char) -> c_int {
+pub extern "C" fn validate_embedding_model(
+    method_id: c_int,
+    model: *const c_char,
+    input_type: InputType,
+) -> c_int {
     if model.is_null() {
         return -1;
     }
@@ -59,7 +62,7 @@ pub extern "C" fn validate_embedding_model(method_id: c_int, model: *const c_cha
         }
     };
 
-    EmbedderRegistry::validate_model(method_id, model_str).unwrap_or(-1)
+    EmbedderRegistry::validate_model(method_id, model_str, input_type).unwrap_or(-1)
 }
 
 #[unsafe(no_mangle)]
@@ -87,12 +90,12 @@ pub extern "C" fn generate_embeddings_from_texts(
         None => return ERR_INVALID_METHOD,
     };
 
-    if !embedder.supports_model_id(model_id) {
+    if !embedder.supports_model_id(model_id, InputType::Text) {
         return ERR_MODEL_NOT_ALLOWED;
     }
 
-    let result = embedder.embed(model_id, text_slices);
-
+    let input = Input::Texts(text_slices);
+    let result = embedder.embed(model_id, input);
     let (mut flat, n_vectors, dim) = match result {
         Ok((flat, n_vectors, dim)) if n_vectors > 0 && !flat.is_empty() => (flat, n_vectors, dim),
         _ => return ERR_EMBEDDING_FAILED,
