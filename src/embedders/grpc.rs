@@ -1,7 +1,7 @@
 #![cfg(feature = "grpc")]
 use crate::embedders::grpc::tei::v1::EmbedBatchRequest;
 use crate::embedders::grpc::tei::v1::embed_client::EmbedClient;
-use crate::embedders::{EMBEDDERS, Embedder};
+use crate::embedders::{EMBEDDERS, Embedder, Input, InputType, ModelInfo};
 use anyhow::Result;
 use std::os::raw::c_float;
 use std::sync::LazyLock;
@@ -41,17 +41,18 @@ thread_local! {
 struct GrpcEmbedder;
 
 impl GrpcEmbedder {
-    const MODELS: &'static [(i32, &'static str)] = &[
-        (0, "sentence-transformers/all-MiniLM-L6-v2"),
-        (1, "sentence-transformers/bge-large-en-v1.5"),
+    const MODELS: &'static [ModelInfo] = &[
+        ModelInfo::new(
+            0,
+            "sentence-transformers/all-MiniLM-L6-v2",
+            &[InputType::Text],
+        ),
+        ModelInfo::new(
+            1,
+            "sentence-transformers/bge-large-en-v1.5",
+            &[InputType::Text],
+        ),
     ];
-
-    fn get_model_string(model_id: i32) -> Option<&'static str> {
-        Self::MODELS
-            .iter()
-            .find(|(id, _)| *id == model_id)
-            .map(|(_, model)| *model)
-    }
 
     fn get_grpc_client() -> Result<EmbedClient<Channel>> {
         CLIENT.with(|cell| {
@@ -74,8 +75,14 @@ impl Embedder for GrpcEmbedder {
         EMBED_METHOD_GRPC_NAME
     }
 
-    fn embed(&self, model_id: i32, text_slices: Vec<&str>) -> Result<(Vec<f32>, usize, usize)> {
-        let model = Self::get_model_string(model_id)
+    fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
+        let text_slices = match input {
+            Input::Texts(texts) => texts,
+        };
+
+        let model = Self::MODELS
+            .iter()
+            .find(|m| m.id == model_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown model ID: {}", model_id))?;
 
         let mut client = GrpcEmbedder::get_grpc_client()?;
@@ -88,9 +95,8 @@ impl Embedder for GrpcEmbedder {
                 truncation_direction: 0,
                 prompt_name: None,
                 dimensions: None,
-                model: model.to_string(),
+                model: model.name.to_string(),
             };
-
             client.embed_batch(tonic::Request::new(request)).await
         })?;
 
@@ -104,7 +110,6 @@ impl Embedder for GrpcEmbedder {
         let n_vectors = embeddings.len();
         let dim = embeddings[0].len();
         let total = n_vectors * dim;
-
         let mut flat: Vec<c_float> = Vec::with_capacity(total);
         for e in embeddings {
             flat.extend_from_slice(&e);
@@ -113,15 +118,16 @@ impl Embedder for GrpcEmbedder {
         Ok((flat, n_vectors, dim))
     }
 
-    fn get_model_id(&self, model: &str) -> Option<i32> {
-        Self::MODELS
-            .iter()
-            .find(|(_, m)| *m == model)
-            .map(|(id, _)| *id)
+    fn get_model(&self, model_name: &str) -> Option<&ModelInfo> {
+        Self::MODELS.iter().find(|m| m.name == model_name)
     }
 
-    fn supports_model_id(&self, model_id: i32) -> bool {
-        Self::get_model_string(model_id).is_some()
+    fn supports_model_id(&self, model_id: i32, input_type: InputType) -> bool {
+        Self::MODELS
+            .iter()
+            .find(|m| m.id == model_id)
+            .map(|m| m.supports_input_type(input_type))
+            .unwrap_or(false)
     }
 }
 

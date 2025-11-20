@@ -1,5 +1,5 @@
 #![cfg(feature = "fastembed")]
-use crate::embedders::{EMBEDDERS, Embedder};
+use crate::embedders::{EMBEDDERS, Embedder, Input, InputType, ModelInfo};
 use anyhow::Result;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::str::FromStr;
@@ -14,17 +14,29 @@ thread_local! {
 
 struct FastEmbedder;
 
+struct ModelDef {
+    model: &'static ModelInfo,
+    embedding_model: EmbeddingModel,
+}
+
 impl FastEmbedder {
-    const MODELS: &'static [(i32, EmbeddingModel)] = &[
-        (0, EmbeddingModel::AllMiniLML6V2),
-        (1, EmbeddingModel::BGELargeENV15),
+    const MODELS: &'static [ModelInfo] = &[
+        ModelInfo::new(0, "AllMiniLML6V2", &[InputType::Text]),
+        ModelInfo::new(1, "BGELargeENV15", &[InputType::Text]),
     ];
 
-    fn get_embedding_model(model_id: i32) -> Option<EmbeddingModel> {
-        Self::MODELS
-            .iter()
-            .find(|(id, _)| *id == model_id)
-            .map(|(_, model)| model.clone())
+    fn get_model_def(model_id: i32) -> Option<ModelDef> {
+        match model_id {
+            0 => Some(ModelDef {
+                model: &Self::MODELS[0],
+                embedding_model: EmbeddingModel::AllMiniLML6V2,
+            }),
+            1 => Some(ModelDef {
+                model: &Self::MODELS[1],
+                embedding_model: EmbeddingModel::BGELargeENV15,
+            }),
+            _ => None,
+        }
     }
 }
 
@@ -37,36 +49,47 @@ impl Embedder for FastEmbedder {
         EMBED_METHOD_FASTEMBED_NAME
     }
 
-    fn embed(&self, model_id: i32, text_slices: Vec<&str>) -> Result<(Vec<f32>, usize, usize)> {
-        let embedding_model = Self::get_embedding_model(model_id)
+    fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
+        let text_slices = match input {
+            Input::Texts(texts) => texts,
+        };
+
+        let model_def = Self::get_model_def(model_id)
             .ok_or_else(|| anyhow::anyhow!("Invalid model ID: {}", model_id))?;
 
         FASTEMBED_MODELS.with(|cell| {
             let mut models = cell.borrow_mut();
-
             let model_instance = models.entry(model_id).or_insert_with(|| {
                 TextEmbedding::try_new(
-                    InitOptions::new(embedding_model)
+                    InitOptions::new(model_def.embedding_model)
                         .with_cache_dir(PathBuf::from("./fastembed_models")),
                 )
                 .expect("Failed to initialize model")
             });
-
             model_instance.embed_flat(text_slices, None)
         })
     }
 
-    fn get_model_id(&self, model: &str) -> Option<i32> {
-        let parsed = EmbeddingModel::from_str(model).ok()?;
+    fn get_model(&self, model_name: &str) -> Option<&ModelInfo> {
+        let parsed = EmbeddingModel::from_str(model_name).ok()?;
 
-        Self::MODELS
-            .iter()
-            .find(|(_, m)| *m == parsed)
-            .map(|(id, _)| *id)
+        for model_def in [Self::get_model_def(0), Self::get_model_def(1)]
+            .into_iter()
+            .flatten()
+        {
+            if model_def.embedding_model == parsed {
+                return Some(model_def.model);
+            }
+        }
+        None
     }
 
-    fn supports_model_id(&self, model_id: i32) -> bool {
-        Self::get_embedding_model(model_id).is_some()
+    fn supports_model_id(&self, model_id: i32, input_type: InputType) -> bool {
+        Self::MODELS
+            .iter()
+            .find(|m| m.id == model_id)
+            .map(|m| m.supports_input_type(input_type))
+            .unwrap_or(false)
     }
 }
 
