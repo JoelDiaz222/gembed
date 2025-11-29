@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import io
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -28,6 +27,7 @@ def get_clip_model(model_name: str, pretrained: str):
     """Load and cache CLIP models with their preprocessor and tokenizer."""
     cache_key = f"{model_name}_{pretrained}"
     if cache_key not in clip_model_cache:
+        print(f"Loading CLIP model: {model_name} with pretrained: {pretrained}")
         model, _, preprocess = open_clip.create_model_and_transforms(
             model_name, pretrained=pretrained
         )
@@ -63,14 +63,7 @@ def encode_multimodal(image_pil, text_inputs, model_name, pretrained):
 
     embeddings = []
 
-    # Use autocast only for CUDA to avoid BFloat16 issues on CPU
-    context_manager = (
-        torch.autocast(device, dtype=torch.float16)
-        if device == "cuda"
-        else contextlib.nullcontext()
-    )
-
-    with torch.no_grad(), context_manager:
+    with torch.no_grad(), torch.autocast(device):
         if image_pil is not None:
             image_tensor = preprocess(image_pil).unsqueeze(0).to(device)
             image_features = model.encode_image(image_tensor)
@@ -82,8 +75,8 @@ def encode_multimodal(image_pil, text_inputs, model_name, pretrained):
             text_features = model.encode_text(text_tensor)
             text_features /= text_features.norm(dim=-1, keepdim=True)
 
-            for feature in text_features:
-                embeddings.append(feature.cpu().numpy())
+            for i in range(text_features.shape[0]):
+                embeddings.append(text_features[i].cpu().numpy())
 
     return embeddings
 
@@ -141,7 +134,7 @@ class EmbedService(pb2_grpc.EmbedServicer):
 
         try:
             image_pil = None
-            text_inputs = list(request.text_inputs) if request.text_inputs else []
+            text_inputs = []
 
             if request.image_bytes:
                 try:
@@ -152,7 +145,11 @@ class EmbedService(pb2_grpc.EmbedServicer):
                 except Exception as e:
                     context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                     context.set_details(f"Failed to parse image: {str(e)}")
+
                     return pb2.EmbedBatchResponse()
+
+            if request.text_inputs:
+                text_inputs = list(request.text_inputs)
 
             embeddings_list = await embed_multimodal_async(
                 image_pil, text_inputs, model_name, pretrained

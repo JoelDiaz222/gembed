@@ -1,10 +1,10 @@
 syntax = "proto3";
-
 package tei.v1;
 
 service Embed {
     rpc Embed (EmbedRequest) returns (EmbedResponse);
     rpc EmbedBatch (EmbedBatchRequest) returns (EmbedBatchResponse);
+    rpc EmbedMultimodal (EmbedMultimodalRequest) returns (EmbedBatchResponse);
 }
 
 message Metadata {
@@ -28,7 +28,7 @@ message EmbedRequest {
     TruncationDirection truncation_direction = 4;
     optional string prompt_name = 5;
     optional uint32 dimensions = 6;
-    string model = 7;
+    optional string model = 7;
 }
 
 message EmbedResponse {
@@ -53,4 +53,10 @@ message EmbedBatchResponse {
 
 message Embedding {
     repeated float values = 1;
+}
+
+message EmbedMultimodalRequest {
+    optional string model = 1;
+    optional bytes image_bytes = 2;
+    repeated string text_inputs = 3;
 }
