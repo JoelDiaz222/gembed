@@ -1,6 +1,6 @@
 #![cfg(feature = "fastembed")]
 use crate::embedders::{EMBEDDERS, Embedder, Input, InputType, ModelInfo};
-use anyhow::Result;
+use anyhow::{Result, bail};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::str::FromStr;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf};
@@ -52,6 +52,7 @@ impl Embedder for FastEmbedder {
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
         let text_slices = match input {
             Input::Texts(texts) => texts,
+            _ => bail!("Unsupported input type"),
         };
 
         let model_def = Self::get_model_def(model_id)

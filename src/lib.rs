@@ -5,6 +5,7 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_float, c_int};
 use std::slice;
 
+const EXIT_SUCCESS: c_int = 0;
 const ERR_INVALID_POINTERS: c_int = -1;
 const ERR_EMPTY_INPUT: c_int = -2;
 const ERR_INVALID_UTF8: c_int = -3;
@@ -16,6 +17,21 @@ const ERR_EMBEDDING_FAILED: c_int = -6;
 pub struct StringSlice {
     pub ptr: *const c_char,
     pub len: usize,
+}
+
+#[repr(C)]
+pub struct ByteSlice {
+    pub ptr: *const u8,
+    pub len: usize,
+}
+
+#[repr(C)]
+pub struct InputData {
+    pub input_type: InputType,
+    pub binary_data: *const ByteSlice,
+    pub n_binary: usize,
+    pub text_data: *const StringSlice,
+    pub n_text: usize,
 }
 
 #[repr(C)]
@@ -66,36 +82,85 @@ pub extern "C" fn validate_embedding_model(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn generate_embeddings_from_texts(
+pub extern "C" fn generate_embeddings(
     method_id: c_int,
     model_id: c_int,
-    inputs: *const StringSlice,
-    n_inputs: usize,
+    input_data: *const InputData,
     out_batch: *mut EmbeddingBatch,
 ) -> c_int {
-    if inputs.is_null() || out_batch.is_null() {
+    if input_data.is_null() || out_batch.is_null() {
         return ERR_INVALID_POINTERS;
     }
 
-    let text_slices = unsafe { get_text_slices(inputs, n_inputs) };
-
-    let text_slices = match text_slices {
-        Ok(v) if !v.is_empty() => v,
-        Ok(_) => return ERR_EMPTY_INPUT,
-        Err(_) => return ERR_INVALID_UTF8,
-    };
+    let input_data = unsafe { &*input_data };
 
     let embedder = match EmbedderRegistry::get_embedder_by_method_id(method_id) {
         Some(e) => e,
         None => return ERR_INVALID_METHOD,
     };
 
-    if !embedder.supports_model_id(model_id, InputType::Text) {
+    if !embedder.supports_model_id(model_id, input_data.input_type) {
         return ERR_MODEL_NOT_ALLOWED;
     }
 
-    let input = Input::Texts(text_slices);
+    // Build the input based on input_type
+    let input = match input_data.input_type {
+        InputType::Text => {
+            if input_data.text_data.is_null() || input_data.n_text == 0 {
+                return ERR_EMPTY_INPUT;
+            }
+            let texts = match unsafe { get_text_slices(input_data.text_data, input_data.n_text) } {
+                Ok(v) => v,
+                Err(_) => return ERR_INVALID_UTF8,
+            };
+            Input::Texts(texts)
+        }
+        InputType::Image => {
+            if input_data.binary_data.is_null() || input_data.n_binary == 0 {
+                return ERR_EMPTY_INPUT;
+            }
+            let image = unsafe {
+                let slice = &*input_data.binary_data;
+                if slice.ptr.is_null() || slice.len == 0 {
+                    return ERR_EMPTY_INPUT;
+                }
+                std::slice::from_raw_parts(slice.ptr, slice.len)
+            };
+            Input::Image(image)
+        }
+        InputType::Multimodal => {
+            let image = if !input_data.binary_data.is_null() && input_data.n_binary > 0 {
+                unsafe {
+                    let slice = &*input_data.binary_data;
+                    if slice.ptr.is_null() || slice.len == 0 {
+                        None
+                    } else {
+                        Some(std::slice::from_raw_parts(slice.ptr, slice.len))
+                    }
+                }
+            } else {
+                None
+            };
+
+            let texts = if !input_data.text_data.is_null() && input_data.n_text > 0 {
+                match unsafe { get_text_slices(input_data.text_data, input_data.n_text) } {
+                    Ok(v) => v,
+                    Err(_) => return ERR_INVALID_UTF8,
+                }
+            } else {
+                vec![]
+            };
+
+            if image.is_none() && texts.is_empty() {
+                return ERR_EMPTY_INPUT;
+            }
+
+            Input::Multimodal { image, texts }
+        }
+    };
+
     let result = embedder.embed(model_id, input);
+
     let (mut flat, n_vectors, dim) = match result {
         Ok((flat, n_vectors, dim)) if n_vectors > 0 && !flat.is_empty() => (flat, n_vectors, dim),
         _ => return ERR_EMBEDDING_FAILED,
@@ -112,7 +177,7 @@ pub extern "C" fn generate_embeddings_from_texts(
         };
     }
 
-    0
+    EXIT_SUCCESS
 }
 
 #[unsafe(no_mangle)]

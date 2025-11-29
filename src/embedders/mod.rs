@@ -1,6 +1,5 @@
 mod fastembed;
 mod grpc;
-
 use anyhow::Result;
 use linkme::distributed_slice;
 
@@ -9,10 +8,16 @@ use linkme::distributed_slice;
 pub enum InputType {
     Text = 0,
     Image = 1,
+    Multimodal = 2,
 }
 
 pub enum Input<'a> {
     Texts(Vec<&'a str>),
+    Image(&'a [u8]),
+    Multimodal {
+        image: Option<&'a [u8]>,
+        texts: Vec<&'a str>,
+    },
 }
 
 pub struct ModelInfo {
@@ -63,11 +68,6 @@ impl EmbedderRegistry {
     pub fn validate_model(method_id: i32, model: &str, input_type: InputType) -> Option<i32> {
         let embedder = Self::get_embedder_by_method_id(method_id)?;
         let model_info = embedder.get_model(model)?;
-
-        if model_info.supports_input_type(input_type) {
-            Some(model_info.id)
-        } else {
-            None
-        }
+        Some(model_info.id).filter(|_| model_info.supports_input_type(input_type))
     }
 }

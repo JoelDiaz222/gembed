@@ -2,3 +2,5 @@ Cargo.lock
 target/
 server/venv/
 server/__pycache__/
+.DS_Store
+server/.DS_Store
