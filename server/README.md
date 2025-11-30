@@ -1,14 +1,43 @@
-```
+## gRPC Server Setup (Remote Inference)
+
+If you are using the [gRPC embedder](../src/embedders/grpc.rs) for remote inference, you need to run a separate gRPC server to handle the model requests.
+
+### 1. Prerequisites and Running the API
+
+```bash
 python3.13 -m venv venv
-source venv/bin/activate # On Windows, use venv\Scripts\activate
-pip install grpcio grpcio-tools sentence-transformers asyncio open_clip_torch
-python3.13 embedding_api_grpc.py
+source venv/bin/activate
+pip install -r requirements.txt
+python3.13 grpc_embedder.py
 ```
 
-```
+### 2. Protobuf Compilation
+
+Use the following command if you need to manually re-generate the Python gRPC client/server files from the [protocol definition](../proto/tei.proto):
+
+```bash
 python3.13 -m grpc_tools.protoc \
-    -I../proto \
-    --python_out=. \
-    --grpc_python_out=. \
-    tei.proto
+  -I../proto \
+  --python_out=. \
+  --grpc_python_out=. \
+  tei.proto
+```
+
+### 3. Docker Compose (Alternative Server Setup)
+
+The gRPC server can run alongside PostgreSQL using Docker Compose. From this directory:
+
+```bash
+docker-compose build
+docker-compose up
+```
+
+To use this option, the [gRPC embedder's source code](../src/embedders/grpc.rs) has to be modified so it uses the Compose network:
+
+```rust
+// From this
+Channel::from_static("http://127.0.0.1:50051")
+
+// To this
+Channel::from_static("http://grpc_embedder_container:50051")
 ```
