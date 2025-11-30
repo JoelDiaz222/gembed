@@ -22,22 +22,3 @@ python3.13 -m grpc_tools.protoc \
   --grpc_python_out=. \
   tei.proto
 ```
-
-### 3. Docker Compose (Alternative Server Setup)
-
-The gRPC server can run alongside PostgreSQL using Docker Compose. From this directory:
-
-```bash
-docker-compose build
-docker-compose up
-```
-
-To use this option, the [gRPC embedder's source code](../src/embedders/grpc.rs) has to be modified so it uses the Compose network:
-
-```rust
-// From this
-Channel::from_static("http://127.0.0.1:50051")
-
-// To this
-Channel::from_static("http://grpc_embedder_container:50051")
-```

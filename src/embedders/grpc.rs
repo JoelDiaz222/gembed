@@ -26,7 +26,11 @@ static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
 });
 
 static ENDPOINT: LazyLock<Endpoint> = LazyLock::new(|| {
-    Channel::from_static("http://127.0.0.1:50051")
+    let url = std::env::var("GRPC_EMBEDDER_ENDPOINT")
+        .unwrap_or_else(|_| "http://127.0.0.1:50051".to_string());
+
+    Channel::from_shared(url)
+        .expect("Invalid gRPC URL")
         .http2_keep_alive_interval(Duration::from_secs(75))
         .keep_alive_timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(5))
