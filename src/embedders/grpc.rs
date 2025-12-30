@@ -1,9 +1,9 @@
 #![cfg(feature = "grpc")]
+use crate::embedders::grpc::tei::v1::embed_client::EmbedClient;
 use crate::embedders::grpc::tei::v1::EmbedBatchRequest;
 use crate::embedders::grpc::tei::v1::EmbedMultimodalRequest;
-use crate::embedders::grpc::tei::v1::embed_client::EmbedClient;
-use crate::embedders::{EMBEDDERS, Embedder, Input, InputType, ModelInfo};
-use anyhow::{Result, anyhow};
+use crate::embedders::{Embedder, Input, InputType, ModelInfo, EMBEDDERS};
+use anyhow::{anyhow, Result};
 use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::runtime::Runtime;
@@ -76,18 +76,18 @@ impl GrpcEmbedder {
 }
 
 impl Embedder for GrpcEmbedder {
-    fn method_id(&self) -> i32 {
+    fn id(&self) -> i32 {
         EMBED_METHOD_GRPC_ID
     }
 
-    fn method_name(&self) -> &'static str {
+    fn name(&self) -> &'static str {
         EMBED_METHOD_GRPC_NAME
     }
 
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
         let model = Self::MODELS
             .iter()
-            .find(|m| m.id == model_id)
+            .find(|m| m.id() == model_id)
             .ok_or_else(|| anyhow!("Unknown model ID: {}", model_id))?;
 
         match input {
@@ -97,20 +97,20 @@ impl Embedder for GrpcEmbedder {
         }
     }
 
-    fn get_model(&self, model_name: &str) -> Option<&ModelInfo> {
-        Self::MODELS.iter().find(|m| m.name == model_name)
+    fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
+        Self::MODELS.iter().find(|m| m.name() == model_name)
     }
 
-    fn supports_model_id(&self, model_id: i32, input_type: InputType) -> bool {
+    fn supports_input_for_model(&self, model_id: i32, input_type: InputType) -> bool {
         Self::MODELS
             .iter()
-            .find(|m| m.id == model_id)
+            .find(|m| m.id() == model_id)
             .map(|m| m.supports_input_type(input_type))
             .unwrap_or(false)
     }
 }
 
-fn embed_texts(texts: Vec<&str>, model: &ModelInfo) -> Result<(Vec<f32>, usize, usize)> {
+fn embed_texts(texts: Vec<&str>, model_info: &ModelInfo) -> Result<(Vec<f32>, usize, usize)> {
     let mut client = GrpcEmbedder::get_grpc_client()?;
 
     let response = RUNTIME.block_on(async {
@@ -121,7 +121,7 @@ fn embed_texts(texts: Vec<&str>, model: &ModelInfo) -> Result<(Vec<f32>, usize, 
             truncation_direction: 0,
             prompt_name: None,
             dimensions: None,
-            model: model.name.to_string(),
+            model: model_info.name().to_string(),
         };
         client.embed_batch(tonic::Request::new(request)).await
     })?;
@@ -144,12 +144,12 @@ fn embed_texts(texts: Vec<&str>, model: &ModelInfo) -> Result<(Vec<f32>, usize, 
     Ok((flat, n_vectors, dim))
 }
 
-fn embed_image(image: &[u8], model: &ModelInfo) -> Result<(Vec<f32>, usize, usize)> {
+fn embed_image(image: &[u8], model_info: &ModelInfo) -> Result<(Vec<f32>, usize, usize)> {
     let mut client = GrpcEmbedder::get_grpc_client()?;
 
     let response = RUNTIME.block_on(async {
         let request = EmbedMultimodalRequest {
-            model: Some(model.name.to_string()),
+            model: Some(model_info.name().to_string()),
             image_bytes: Some(image.to_vec()),
             text_inputs: vec![],
         };
@@ -170,13 +170,13 @@ fn embed_image(image: &[u8], model: &ModelInfo) -> Result<(Vec<f32>, usize, usiz
 fn embed_multimodal(
     image: Option<&[u8]>,
     texts: Vec<&str>,
-    model: &ModelInfo,
+    model_info: &ModelInfo,
 ) -> Result<(Vec<f32>, usize, usize)> {
     let mut client = GrpcEmbedder::get_grpc_client()?;
 
     let response = RUNTIME.block_on(async {
         let request = EmbedMultimodalRequest {
-            model: Some(model.name.to_string()),
+            model: Some(model_info.name().to_string()),
             image_bytes: image.map(|b| b.to_vec()),
             text_inputs: texts.iter().map(|&s| s.to_string()).collect(),
         };

@@ -1,6 +1,6 @@
 #![cfg(feature = "fastembed")]
-use crate::embedders::{EMBEDDERS, Embedder, Input, InputType, ModelInfo};
-use anyhow::{Result, bail};
+use crate::embedders::{Embedder, Input, InputType, ModelInfo, EMBEDDERS};
+use anyhow::{bail, Result};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::str::FromStr;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf};
@@ -41,11 +41,11 @@ impl FastEmbedder {
 }
 
 impl Embedder for FastEmbedder {
-    fn method_id(&self) -> i32 {
+    fn id(&self) -> i32 {
         EMBED_METHOD_FASTEMBED_ID
     }
 
-    fn method_name(&self) -> &'static str {
+    fn name(&self) -> &'static str {
         EMBED_METHOD_FASTEMBED_NAME
     }
 
@@ -71,7 +71,7 @@ impl Embedder for FastEmbedder {
         })
     }
 
-    fn get_model(&self, model_name: &str) -> Option<&ModelInfo> {
+    fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
         let parsed = EmbeddingModel::from_str(model_name).ok()?;
 
         for model_def in [Self::get_model_def(0), Self::get_model_def(1)]
@@ -85,10 +85,10 @@ impl Embedder for FastEmbedder {
         None
     }
 
-    fn supports_model_id(&self, model_id: i32, input_type: InputType) -> bool {
+    fn supports_input_for_model(&self, model_id: i32, input_type: InputType) -> bool {
         Self::MODELS
             .iter()
-            .find(|m| m.id == model_id)
+            .find(|m| m.id() == model_id)
             .map(|m| m.supports_input_type(input_type))
             .unwrap_or(false)
     }

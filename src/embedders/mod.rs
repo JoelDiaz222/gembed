@@ -21,8 +21,8 @@ pub enum Input<'a> {
 }
 
 pub struct ModelInfo {
-    pub id: i32,
-    pub name: &'static str,
+    id: i32,
+    name: &'static str,
     supported_inputs: &'static [InputType],
 }
 
@@ -35,17 +35,25 @@ impl ModelInfo {
         }
     }
 
+    pub fn id(&self) -> i32 {
+        self.id
+    }
+
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
     pub fn supports_input_type(&self, input_type: InputType) -> bool {
         self.supported_inputs.contains(&input_type)
     }
 }
 
 pub trait Embedder: Send + Sync {
-    fn method_id(&self) -> i32;
-    fn method_name(&self) -> &'static str;
+    fn id(&self) -> i32;
+    fn name(&self) -> &'static str;
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)>;
-    fn get_model(&self, model_name: &str) -> Option<&ModelInfo>;
-    fn supports_model_id(&self, model_id: i32, input_type: InputType) -> bool;
+    fn model_info(&self, model_name: &str) -> Option<&ModelInfo>;
+    fn supports_input_for_model(&self, model_id: i32, input_type: InputType) -> bool;
 }
 
 #[distributed_slice]
@@ -54,22 +62,23 @@ pub static EMBEDDERS: [&'static dyn Embedder] = [..];
 pub struct EmbedderRegistry;
 
 impl EmbedderRegistry {
-    pub fn get_embedder_by_method_id(method: i32) -> Option<&'static dyn Embedder> {
-        EMBEDDERS.iter().find(|e| e.method_id() == method).copied()
+    pub fn get_embedder(id: i32) -> Option<&'static dyn Embedder> {
+        EMBEDDERS.iter().find(|e| e.id() == id).copied()
     }
 
-    pub fn validate_method(method: &str) -> Option<i32> {
-        EMBEDDERS
-            .iter()
-            .find(|e| e.method_name() == method)
-            .map(|e| e.method_id())
+    pub fn get_embedder_id(name: &str) -> Option<i32> {
+        EMBEDDERS.iter().find(|e| e.name() == name).map(|e| e.id())
     }
 
-    pub fn validate_model(method_id: i32, model: &str, input_type: InputType) -> Option<i32> {
-        let embedder = Self::get_embedder_by_method_id(method_id)?;
-        let model_info = embedder.get_model(model)?;
+    pub fn validate_model(
+        embedder_id: i32,
+        model_name: &str,
+        input_type: InputType,
+    ) -> Option<i32> {
+        let embedder = Self::get_embedder(embedder_id)?;
+        let model_info = embedder.model_info(model_name)?;
         model_info
             .supports_input_type(input_type)
-            .then_some(model_info.id)
+            .then_some(model_info.id())
     }
 }
