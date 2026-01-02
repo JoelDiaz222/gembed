@@ -1,10 +1,11 @@
 #![cfg(feature = "embed_anything")]
 use crate::embedders::{Embedder, Input, InputType, ModelInfo, EMBEDDERS};
-use crate::utils::{detect_image_format, flatten_vectors, supports_input_for_model};
+use crate::utils::{detect_image_format, flatten_vectors};
 use anyhow::{anyhow, bail, Result};
 use embed_anything::embed_image_directory;
 use embed_anything::embeddings::embed::{Embedder as EAEmbedder, EmbedderBuilder};
 use embed_anything::embeddings::local::text_embedding::ONNXModel;
+use linkme::distributed_slice;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::write;
@@ -12,8 +13,22 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
-pub static EMBED_METHOD_EMBED_ANYTHING_ID: i32 = 2;
-pub static EMBED_METHOD_EMBED_ANYTHING_NAME: &str = "embed_anything";
+pub static EMBED_ANYTHING_EMBEDDER_ID: i32 = 2;
+pub static EMBED_ANYTHING_EMBEDDER_NAME: &str = "embed_anything";
+
+struct ModelDef {
+    architecture: &'static str,
+    onnx_model: Option<ONNXModel>,
+    hf_model_id: Option<&'static str>,
+}
+
+struct ModelRegistration {
+    info: ModelInfo,
+    def: ModelDef,
+}
+
+#[distributed_slice]
+pub static EMBED_ANYTHING_REGISTERED_MODELS: [ModelRegistration] = [..];
 
 thread_local! {
     static RUNTIME: RefCell<Option<Runtime>> = RefCell::new(None);
@@ -22,42 +37,11 @@ thread_local! {
 
 struct EmbedAnythingEmbedder;
 
-struct ModelDef {
-    architecture: &'static str,
-    onnx_model: Option<ONNXModel>,
-    hf_model_id: Option<&'static str>,
-}
-
 impl EmbedAnythingEmbedder {
-    const MODELS: &'static [ModelInfo] = &[
-        ModelInfo::new(0, "Qdrant/all-MiniLM-L6-v2-onnx", &[InputType::Text]),
-        ModelInfo::new(1, "Xenova/bge-large-en-v1.5", &[InputType::Text]),
-        ModelInfo::new(
-            2,
-            "openai/clip-vit-base-patch32",
-            &[InputType::Text, InputType::Image, InputType::Multimodal],
-        ),
-    ];
-
-    fn model_def(model_id: i32) -> Option<ModelDef> {
-        match model_id {
-            0 => Some(ModelDef {
-                architecture: "bert",
-                onnx_model: Some(ONNXModel::AllMiniLML6V2),
-                hf_model_id: None,
-            }),
-            1 => Some(ModelDef {
-                architecture: "bert",
-                onnx_model: Some(ONNXModel::BGELargeENV15),
-                hf_model_id: None,
-            }),
-            2 => Some(ModelDef {
-                architecture: "clip",
-                onnx_model: None,
-                hf_model_id: Some("openai/clip-vit-base-patch32"),
-            }),
-            _ => None,
-        }
+    fn lookup_model_registration(model_id: i32) -> Option<&'static ModelRegistration> {
+        EMBED_ANYTHING_REGISTERED_MODELS
+            .iter()
+            .find(|reg| reg.info.id() == model_id)
     }
 
     fn runtime() -> Result<&'static Runtime> {
@@ -74,8 +58,10 @@ impl EmbedAnythingEmbedder {
     }
 
     fn embedder(model_id: i32) -> Result<Arc<EAEmbedder>> {
-        let model_def =
-            Self::model_def(model_id).ok_or_else(|| anyhow!("Invalid model ID: {}", model_id))?;
+        let registration = Self::lookup_model_registration(model_id)
+            .ok_or_else(|| anyhow!("Invalid model ID: {}", model_id))?;
+
+        let model_def = &registration.def;
 
         EMBED_ANYTHING_MODELS.with(|cell| {
             let mut models = cell.borrow_mut();
@@ -104,11 +90,11 @@ impl EmbedAnythingEmbedder {
 
 impl Embedder for EmbedAnythingEmbedder {
     fn id(&self) -> i32 {
-        EMBED_METHOD_EMBED_ANYTHING_ID
+        EMBED_ANYTHING_EMBEDDER_ID
     }
 
     fn name(&self) -> &'static str {
-        EMBED_METHOD_EMBED_ANYTHING_NAME
+        EMBED_ANYTHING_EMBEDDER_NAME
     }
 
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
@@ -125,11 +111,16 @@ impl Embedder for EmbedAnythingEmbedder {
     }
 
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
-        Self::MODELS.iter().find(|m| m.name() == model_name)
+        EMBED_ANYTHING_REGISTERED_MODELS
+            .iter()
+            .find(|reg| reg.info.name() == model_name)
+            .map(|reg| &reg.info)
     }
 
     fn supports_input_for_model(&self, model_id: i32, input_type: InputType) -> bool {
-        supports_input_for_model(Self::MODELS, model_id, input_type)
+        Self::lookup_model_registration(model_id)
+            .map(|reg| reg.info.supports_input_type(input_type))
+            .unwrap_or(false)
     }
 }
 
@@ -207,3 +198,27 @@ fn embed_multimodal(
 
 #[linkme::distributed_slice(EMBEDDERS)]
 static EMBED_ANYTHING: &dyn Embedder = &EmbedAnythingEmbedder;
+
+#[distributed_slice(EMBED_ANYTHING_REGISTERED_MODELS)]
+static ALL_MINI_LM_L6_V2_ONNX: ModelRegistration = ModelRegistration {
+    info: ModelInfo::new(0, "Qdrant/all-MiniLM-L6-v2-onnx", &[InputType::Text]),
+    def: ModelDef {
+        architecture: "bert",
+        onnx_model: Some(ONNXModel::AllMiniLML6V2),
+        hf_model_id: None,
+    },
+};
+
+#[distributed_slice(EMBED_ANYTHING_REGISTERED_MODELS)]
+static CLIP_VIT_BASE_PATCH32: ModelRegistration = ModelRegistration {
+    info: ModelInfo::new(
+        1,
+        "openai/clip-vit-base-patch32",
+        &[InputType::Text, InputType::Image, InputType::Multimodal],
+    ),
+    def: ModelDef {
+        architecture: "clip",
+        onnx_model: None,
+        hf_model_id: Some("openai/clip-vit-base-patch32"),
+    },
+};

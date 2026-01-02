@@ -5,6 +5,7 @@ use crate::embedders::grpc::tei::v1::EmbedMultimodalRequest;
 use crate::embedders::{Embedder, Input, InputType, ModelInfo, EMBEDDERS};
 use crate::utils::flatten_vectors;
 use anyhow::{anyhow, Result};
+use linkme::distributed_slice;
 use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::runtime::Runtime;
@@ -16,8 +17,11 @@ pub mod tei {
     }
 }
 
-pub static EMBED_METHOD_GRPC_ID: i32 = 1;
-pub static EMBED_METHOD_GRPC_NAME: &str = "grpc";
+pub static GRPC_EMBEDDER_ID: i32 = 1;
+pub static GRPC_EMBEDDER_NAME: &str = "grpc";
+
+#[distributed_slice]
+pub static GRPC_REGISTERED_MODELS: [ModelInfo] = [..];
 
 static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_current_thread()
@@ -46,23 +50,9 @@ thread_local! {
 struct GrpcEmbedder;
 
 impl GrpcEmbedder {
-    const MODELS: &'static [ModelInfo] = &[
-        ModelInfo::new(
-            0,
-            "sentence-transformers/all-MiniLM-L6-v2",
-            &[InputType::Text],
-        ),
-        ModelInfo::new(
-            1,
-            "sentence-transformers/bge-large-en-v1.5",
-            &[InputType::Text],
-        ),
-        ModelInfo::new(
-            2,
-            "ViT-B-32",
-            &[InputType::Text, InputType::Image, InputType::Multimodal],
-        ),
-    ];
+    fn lookup_model_registration(model_id: i32) -> Option<&'static ModelInfo> {
+        GRPC_REGISTERED_MODELS.iter().find(|m| m.id() == model_id)
+    }
 
     fn grpc_client() -> Result<EmbedClient<Channel>> {
         CLIENT.with(|cell| {
@@ -78,34 +68,32 @@ impl GrpcEmbedder {
 
 impl Embedder for GrpcEmbedder {
     fn id(&self) -> i32 {
-        EMBED_METHOD_GRPC_ID
+        GRPC_EMBEDDER_ID
     }
 
     fn name(&self) -> &'static str {
-        EMBED_METHOD_GRPC_NAME
+        GRPC_EMBEDDER_NAME
     }
 
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
-        let model = Self::MODELS
-            .iter()
-            .find(|m| m.id() == model_id)
+        let model_info = Self::lookup_model_registration(model_id)
             .ok_or_else(|| anyhow!("Unknown model ID: {}", model_id))?;
 
         match input {
-            Input::Texts(texts) => embed_texts(texts, model),
-            Input::Image(image) => embed_image(image, model),
-            Input::Multimodal { image, texts } => embed_multimodal(image, texts, model),
+            Input::Texts(texts) => embed_texts(texts, model_info),
+            Input::Image(image) => embed_image(image, model_info),
+            Input::Multimodal { image, texts } => embed_multimodal(image, texts, model_info),
         }
     }
 
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
-        Self::MODELS.iter().find(|m| m.name() == model_name)
+        GRPC_REGISTERED_MODELS
+            .iter()
+            .find(|m| m.name() == model_name)
     }
 
     fn supports_input_for_model(&self, model_id: i32, input_type: InputType) -> bool {
-        Self::MODELS
-            .iter()
-            .find(|m| m.id() == model_id)
+        Self::lookup_model_registration(model_id)
             .map(|m| m.supports_input_type(input_type))
             .unwrap_or(false)
     }
@@ -188,3 +176,24 @@ fn embed_multimodal(
 
 #[linkme::distributed_slice(EMBEDDERS)]
 static GRPC: &dyn Embedder = &GrpcEmbedder;
+
+#[distributed_slice(GRPC_REGISTERED_MODELS)]
+static ALL_MINI_LM_L6_V2: ModelInfo = ModelInfo::new(
+    0,
+    "sentence-transformers/all-MiniLM-L6-v2",
+    &[InputType::Text],
+);
+
+#[distributed_slice(GRPC_REGISTERED_MODELS)]
+static BGE_LARGE_EN_V1_5: ModelInfo = ModelInfo::new(
+    1,
+    "sentence-transformers/bge-large-en-v1.5",
+    &[InputType::Text],
+);
+
+#[distributed_slice(GRPC_REGISTERED_MODELS)]
+static VIT_B_32: ModelInfo = ModelInfo::new(
+    2,
+    "ViT-B-32",
+    &[InputType::Text, InputType::Image, InputType::Multimodal],
+);

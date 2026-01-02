@@ -1,11 +1,10 @@
 mod embedders;
 mod utils;
 
-use crate::embedders::{EmbedderRegistry, Input, InputType};
+use crate::embedders::{EmbedderRegistry, InputType};
 use crate::utils::{
-    ffi_guard, EmbeddingBatch, InputData, StringSlice,
-    ERR_EMPTY_INPUT, ERR_INVALID_EMBEDDER, ERR_INVALID_POINTER, ERR_INVALID_UTF8, ERR_MODEL_NOT_ALLOWED, EXIT_SUCCESS,
-    GENERIC_ERROR,
+    build_input, ffi_guard, EmbeddingBatch, InputData,
+    StringSlice, ERR_EMPTY_INPUT, ERR_INVALID_EMBEDDER, ERR_INVALID_POINTER, ERR_MODEL_NOT_ALLOWED, EXIT_SUCCESS, GENERIC_ERROR,
 };
 use anyhow::Result;
 use std::ffi::CStr;
@@ -138,65 +137,6 @@ unsafe fn get_text_slices<'a>(
     }
 
     Ok(result)
-}
-
-/// Build the input based on input_type
-fn build_input(input_data: &'_ InputData) -> Result<Input<'_>, c_int> {
-    let input = match input_data.input_type {
-        InputType::Text => {
-            if input_data.text_data.is_null() || input_data.n_text == 0 {
-                return Err(ERR_EMPTY_INPUT);
-            }
-            let texts = match unsafe { get_text_slices(input_data.text_data, input_data.n_text) } {
-                Ok(v) => v,
-                Err(_) => return Err(ERR_INVALID_UTF8),
-            };
-            Input::Texts(texts)
-        }
-        InputType::Image => {
-            if input_data.binary_data.is_null() || input_data.n_binary == 0 {
-                return Err(ERR_EMPTY_INPUT);
-            }
-            let image = unsafe {
-                let slice = &*input_data.binary_data;
-                if slice.ptr.is_null() || slice.len == 0 {
-                    return Err(ERR_EMPTY_INPUT);
-                }
-                slice::from_raw_parts(slice.ptr, slice.len)
-            };
-            Input::Image(image)
-        }
-        InputType::Multimodal => {
-            let image = if !input_data.binary_data.is_null() && input_data.n_binary > 0 {
-                unsafe {
-                    let slice = &*input_data.binary_data;
-                    if slice.ptr.is_null() || slice.len == 0 {
-                        None
-                    } else {
-                        Some(slice::from_raw_parts(slice.ptr, slice.len))
-                    }
-                }
-            } else {
-                None
-            };
-
-            let texts = if !input_data.text_data.is_null() && input_data.n_text > 0 {
-                match unsafe { get_text_slices(input_data.text_data, input_data.n_text) } {
-                    Ok(v) => v,
-                    Err(_) => return Err(ERR_INVALID_UTF8),
-                }
-            } else {
-                vec![]
-            };
-
-            if image.is_none() && texts.is_empty() {
-                return Err(ERR_EMPTY_INPUT);
-            }
-
-            Input::Multimodal { image, texts }
-        }
-    };
-    Ok(input)
 }
 
 /// Free an embedding batch given its pointer

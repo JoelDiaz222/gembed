@@ -1,13 +1,20 @@
 #![cfg(feature = "fastembed")]
 use crate::embedders::{Embedder, Input, InputType, ModelInfo, EMBEDDERS};
-use crate::utils::supports_input_for_model;
 use anyhow::{bail, Result};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-use std::str::FromStr;
+use linkme::distributed_slice;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 
-pub static EMBED_METHOD_FASTEMBED_ID: i32 = 0;
-pub static EMBED_METHOD_FASTEMBED_NAME: &str = "fastembed";
+pub static FASTEMBED_EMBEDDER_ID: i32 = 0;
+pub static FASTEMBED_EMBEDDER_NAME: &str = "fastembed";
+
+struct ModelRegistration {
+    pub info: ModelInfo,
+    pub embedding_model: EmbeddingModel,
+}
+
+#[distributed_slice]
+pub static FASTEMBED_REGISTERED_MODELS: [ModelRegistration] = [..];
 
 thread_local! {
     static FASTEMBED_MODELS: RefCell<HashMap<i32, TextEmbedding>> = RefCell::new(HashMap::new());
@@ -15,39 +22,21 @@ thread_local! {
 
 struct FastEmbedder;
 
-struct ModelDef {
-    model: &'static ModelInfo,
-    embedding_model: EmbeddingModel,
-}
-
 impl FastEmbedder {
-    const MODELS: &'static [ModelInfo] = &[
-        ModelInfo::new(0, "Qdrant/all-MiniLM-L6-v2-onnx", &[InputType::Text]),
-        ModelInfo::new(1, "Xenova/bge-large-en-v1.5", &[InputType::Text]),
-    ];
-
-    fn model_def(model_id: i32) -> Option<ModelDef> {
-        match model_id {
-            0 => Some(ModelDef {
-                model: &Self::MODELS[0],
-                embedding_model: EmbeddingModel::AllMiniLML6V2,
-            }),
-            1 => Some(ModelDef {
-                model: &Self::MODELS[1],
-                embedding_model: EmbeddingModel::BGELargeENV15,
-            }),
-            _ => None,
-        }
+    fn lookup_model_registration(model_id: i32) -> Option<&'static ModelRegistration> {
+        FASTEMBED_REGISTERED_MODELS
+            .iter()
+            .find(|reg| reg.info.id() == model_id)
     }
 }
 
 impl Embedder for FastEmbedder {
     fn id(&self) -> i32 {
-        EMBED_METHOD_FASTEMBED_ID
+        FASTEMBED_EMBEDDER_ID
     }
 
     fn name(&self) -> &'static str {
-        EMBED_METHOD_FASTEMBED_NAME
+        FASTEMBED_EMBEDDER_NAME
     }
 
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
@@ -56,14 +45,14 @@ impl Embedder for FastEmbedder {
             _ => bail!("Unsupported input type"),
         };
 
-        let model_def = Self::model_def(model_id)
+        let registration = Self::lookup_model_registration(model_id)
             .ok_or_else(|| anyhow::anyhow!("Invalid model ID: {}", model_id))?;
 
         FASTEMBED_MODELS.with(|cell| {
             let mut models = cell.borrow_mut();
             let model_instance = models.entry(model_id).or_insert_with(|| {
                 TextEmbedding::try_new(
-                    InitOptions::new(model_def.embedding_model)
+                    InitOptions::new(registration.embedding_model.clone())
                         .with_cache_dir(PathBuf::from("./fastembed_models")),
                 )
                 .expect("Failed to initialize model")
@@ -73,23 +62,30 @@ impl Embedder for FastEmbedder {
     }
 
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
-        let parsed = EmbeddingModel::from_str(model_name).ok()?;
-
-        for model_def in [Self::model_def(0), Self::model_def(1)]
-            .into_iter()
-            .flatten()
-        {
-            if model_def.embedding_model == parsed {
-                return Some(model_def.model);
-            }
-        }
-        None
+        FASTEMBED_REGISTERED_MODELS
+            .iter()
+            .find(|reg| reg.info.name() == model_name)
+            .map(|reg| &reg.info)
     }
 
     fn supports_input_for_model(&self, model_id: i32, input_type: InputType) -> bool {
-        supports_input_for_model(Self::MODELS, model_id, input_type)
+        Self::lookup_model_registration(model_id)
+            .map(|reg| reg.info.supports_input_type(input_type))
+            .unwrap_or(false)
     }
 }
 
 #[linkme::distributed_slice(EMBEDDERS)]
 static FASTEMBED: &dyn Embedder = &FastEmbedder;
+
+#[distributed_slice(FASTEMBED_REGISTERED_MODELS)]
+static ALL_MINI_LM_L6_V2: ModelRegistration = ModelRegistration {
+    info: ModelInfo::new(0, "Qdrant/all-MiniLM-L6-v2-onnx", &[InputType::Text]),
+    embedding_model: EmbeddingModel::AllMiniLML6V2,
+};
+
+#[distributed_slice(FASTEMBED_REGISTERED_MODELS)]
+static BGE_LARGE_EN_V1_5: ModelRegistration = ModelRegistration {
+    info: ModelInfo::new(1, "Xenova/bge-large-en-v1.5", &[InputType::Text]),
+    embedding_model: EmbeddingModel::BGELargeENV15,
+};
