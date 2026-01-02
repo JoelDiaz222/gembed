@@ -1,62 +1,39 @@
 mod embedders;
+mod utils;
+
 use crate::embedders::{EmbedderRegistry, Input, InputType};
+use crate::utils::{
+    ffi_guard, EmbeddingBatch, InputData, StringSlice,
+    ERR_EMPTY_INPUT, ERR_INVALID_EMBEDDER, ERR_INVALID_POINTER, ERR_INVALID_UTF8, ERR_MODEL_NOT_ALLOWED, EXIT_SUCCESS,
+    GENERIC_ERROR,
+};
 use anyhow::Result;
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_float, c_int};
+use std::os::raw::{c_char, c_int};
 use std::slice;
-
-const EXIT_SUCCESS: c_int = 0;
-const ERR_INVALID_POINTERS: c_int = -1;
-const ERR_EMPTY_INPUT: c_int = -2;
-const ERR_INVALID_UTF8: c_int = -3;
-const ERR_INVALID_EMBEDDER: c_int = -4;
-const ERR_MODEL_NOT_ALLOWED: c_int = -5;
-const ERR_EMBEDDING_FAILED: c_int = -6;
-
-#[repr(C)]
-pub struct StringSlice {
-    pub ptr: *const c_char,
-    pub len: usize,
-}
-
-#[repr(C)]
-pub struct ByteSlice {
-    pub ptr: *const u8,
-    pub len: usize,
-}
-
-#[repr(C)]
-pub struct InputData {
-    pub input_type: InputType,
-    pub binary_data: *const ByteSlice,
-    pub n_binary: usize,
-    pub text_data: *const StringSlice,
-    pub n_text: usize,
-}
-
-#[repr(C)]
-pub struct EmbeddingBatch {
-    pub data: *mut c_float,
-    pub n_vectors: usize,
-    pub dim: usize,
-}
 
 /// Validates embedder by name and returns its ID
 /// Returns -1 if non-existent
 #[unsafe(no_mangle)]
 pub extern "C" fn validate_embedder(name: *const c_char) -> c_int {
-    if name.is_null() {
-        return -1;
-    }
-
-    let name_str = unsafe {
-        match CStr::from_ptr(name).to_str() {
-            Ok(s) => s,
-            Err(_) => return -1,
+    ffi_guard(|| {
+        if name.is_null() {
+            return ERR_INVALID_POINTER;
         }
-    };
 
-    EmbedderRegistry::get_embedder_id(name_str).unwrap_or(-1)
+        let name_str = unsafe {
+            match CStr::from_ptr(name).to_str() {
+                Ok(s) => s,
+                Err(_) => return ERR_INVALID_POINTER,
+            }
+        };
+
+        if name_str.is_empty() {
+            return ERR_EMPTY_INPUT;
+        }
+
+        EmbedderRegistry::lookup_embedder_id(name_str).unwrap_or(GENERIC_ERROR)
+    })
 }
 
 /// Validates model string for given embedder and input type, returns model ID
@@ -67,18 +44,25 @@ pub extern "C" fn validate_embedding_model(
     model_name: *const c_char,
     input_type: InputType,
 ) -> c_int {
-    if model_name.is_null() {
-        return -1;
-    }
-
-    let model_str = unsafe {
-        match CStr::from_ptr(model_name).to_str() {
-            Ok(s) => s,
-            Err(_) => return -1,
+    ffi_guard(|| {
+        if model_name.is_null() {
+            return ERR_INVALID_POINTER;
         }
-    };
 
-    EmbedderRegistry::validate_model(embedder_id, model_str, input_type).unwrap_or(-1)
+        let model_str = unsafe {
+            match CStr::from_ptr(model_name).to_str() {
+                Ok(s) => s,
+                Err(_) => return ERR_INVALID_POINTER,
+            }
+        };
+
+        if model_str.is_empty() {
+            return ERR_EMPTY_INPUT;
+        }
+
+        EmbedderRegistry::validate_model_and_input_type(embedder_id, model_str, input_type)
+            .unwrap_or(GENERIC_ERROR)
+    })
 }
 
 /// Embeds the input_data using the embedder and model specified by ID,
@@ -90,45 +74,49 @@ pub extern "C" fn generate_embeddings(
     input_data: *const InputData,
     out_batch: *mut EmbeddingBatch,
 ) -> c_int {
-    if input_data.is_null() || out_batch.is_null() {
-        return ERR_INVALID_POINTERS;
-    }
+    ffi_guard(|| {
+        if input_data.is_null() || out_batch.is_null() {
+            return ERR_INVALID_POINTER;
+        }
 
-    let input_data = unsafe { &*input_data };
+        let input_data = unsafe { &*input_data };
 
-    let embedder = match EmbedderRegistry::get_embedder(embedder_id) {
-        Some(e) => e,
-        None => return ERR_INVALID_EMBEDDER,
-    };
-
-    if !embedder.supports_input_for_model(model_id, input_data.input_type) {
-        return ERR_MODEL_NOT_ALLOWED;
-    }
-
-    let input = match build_input(input_data) {
-        Ok(value) => value,
-        Err(value) => return value,
-    };
-
-    let result = embedder.embed(model_id, input);
-
-    let (mut flat, n_vectors, dim) = match result {
-        Ok((flat, n_vectors, dim)) if n_vectors > 0 && !flat.is_empty() => (flat, n_vectors, dim),
-        _ => return ERR_EMBEDDING_FAILED,
-    };
-
-    let ptr = flat.as_mut_ptr();
-    std::mem::forget(flat);
-
-    unsafe {
-        *out_batch = EmbeddingBatch {
-            data: ptr,
-            n_vectors,
-            dim,
+        let embedder = match EmbedderRegistry::lookup_embedder(embedder_id) {
+            Some(e) => e,
+            None => return ERR_INVALID_EMBEDDER,
         };
-    }
 
-    EXIT_SUCCESS
+        if !embedder.supports_input_for_model(model_id, input_data.input_type) {
+            return ERR_MODEL_NOT_ALLOWED;
+        }
+
+        let input = match build_input(input_data) {
+            Ok(value) => value,
+            Err(value) => return value,
+        };
+
+        let result = embedder.embed(model_id, input);
+
+        let (mut flat, n_vectors, dim) = match result {
+            Ok((flat, n_vectors, dim)) if n_vectors > 0 && !flat.is_empty() => {
+                (flat, n_vectors, dim)
+            }
+            _ => return GENERIC_ERROR,
+        };
+
+        let ptr = flat.as_mut_ptr();
+        std::mem::forget(flat);
+
+        unsafe {
+            *out_batch = EmbeddingBatch {
+                data: ptr,
+                n_vectors,
+                dim,
+            };
+        }
+
+        EXIT_SUCCESS
+    })
 }
 
 /// The C caller guarantees that the strings live for the call duration
@@ -174,7 +162,7 @@ fn build_input(input_data: &'_ InputData) -> Result<Input<'_>, c_int> {
                 if slice.ptr.is_null() || slice.len == 0 {
                     return Err(ERR_EMPTY_INPUT);
                 }
-                std::slice::from_raw_parts(slice.ptr, slice.len)
+                slice::from_raw_parts(slice.ptr, slice.len)
             };
             Input::Image(image)
         }
@@ -185,7 +173,7 @@ fn build_input(input_data: &'_ InputData) -> Result<Input<'_>, c_int> {
                     if slice.ptr.is_null() || slice.len == 0 {
                         None
                     } else {
-                        Some(std::slice::from_raw_parts(slice.ptr, slice.len))
+                        Some(slice::from_raw_parts(slice.ptr, slice.len))
                     }
                 }
             } else {

@@ -3,6 +3,7 @@ use crate::embedders::grpc::tei::v1::embed_client::EmbedClient;
 use crate::embedders::grpc::tei::v1::EmbedBatchRequest;
 use crate::embedders::grpc::tei::v1::EmbedMultimodalRequest;
 use crate::embedders::{Embedder, Input, InputType, ModelInfo, EMBEDDERS};
+use crate::utils::flatten_vectors;
 use anyhow::{anyhow, Result};
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -63,7 +64,7 @@ impl GrpcEmbedder {
         ),
     ];
 
-    fn get_grpc_client() -> Result<EmbedClient<Channel>> {
+    fn grpc_client() -> Result<EmbedClient<Channel>> {
         CLIENT.with(|cell| {
             let mut client_opt = cell.borrow_mut();
             if client_opt.is_none() {
@@ -111,7 +112,7 @@ impl Embedder for GrpcEmbedder {
 }
 
 fn embed_texts(texts: Vec<&str>, model_info: &ModelInfo) -> Result<(Vec<f32>, usize, usize)> {
-    let mut client = GrpcEmbedder::get_grpc_client()?;
+    let mut client = GrpcEmbedder::grpc_client()?;
 
     let response = RUNTIME.block_on(async {
         let request = EmbedBatchRequest {
@@ -133,19 +134,11 @@ fn embed_texts(texts: Vec<&str>, model_info: &ModelInfo) -> Result<(Vec<f32>, us
         .map(|e| e.values)
         .collect();
 
-    let n_vectors = embeddings.len();
-    let dim = embeddings.first().map(|e| e.len()).unwrap_or(0);
-    let total = n_vectors * dim;
-    let mut flat: Vec<f32> = Vec::with_capacity(total);
-    for e in embeddings {
-        flat.extend_from_slice(&e);
-    }
-
-    Ok((flat, n_vectors, dim))
+    flatten_vectors(embeddings)
 }
 
 fn embed_image(image: &[u8], model_info: &ModelInfo) -> Result<(Vec<f32>, usize, usize)> {
-    let mut client = GrpcEmbedder::get_grpc_client()?;
+    let mut client = GrpcEmbedder::grpc_client()?;
 
     let response = RUNTIME.block_on(async {
         let request = EmbedMultimodalRequest {
@@ -172,7 +165,7 @@ fn embed_multimodal(
     texts: Vec<&str>,
     model_info: &ModelInfo,
 ) -> Result<(Vec<f32>, usize, usize)> {
-    let mut client = GrpcEmbedder::get_grpc_client()?;
+    let mut client = GrpcEmbedder::grpc_client()?;
 
     let response = RUNTIME.block_on(async {
         let request = EmbedMultimodalRequest {
@@ -190,15 +183,7 @@ fn embed_multimodal(
         .map(|e| e.values)
         .collect();
 
-    let n_vectors = embeddings.len();
-    let dim = embeddings.first().map(|e| e.len()).unwrap_or(0);
-    let total = n_vectors * dim;
-    let mut flat: Vec<f32> = Vec::with_capacity(total);
-    for e in embeddings {
-        flat.extend_from_slice(&e);
-    }
-
-    Ok((flat, n_vectors, dim))
+    flatten_vectors(embeddings)
 }
 
 #[linkme::distributed_slice(EMBEDDERS)]

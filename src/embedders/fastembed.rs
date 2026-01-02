@@ -1,5 +1,6 @@
 #![cfg(feature = "fastembed")]
 use crate::embedders::{Embedder, Input, InputType, ModelInfo, EMBEDDERS};
+use crate::utils::supports_input_for_model;
 use anyhow::{bail, Result};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::str::FromStr;
@@ -21,11 +22,11 @@ struct ModelDef {
 
 impl FastEmbedder {
     const MODELS: &'static [ModelInfo] = &[
-        ModelInfo::new(0, "AllMiniLML6V2", &[InputType::Text]),
-        ModelInfo::new(1, "BGELargeENV15", &[InputType::Text]),
+        ModelInfo::new(0, "Qdrant/all-MiniLM-L6-v2-onnx", &[InputType::Text]),
+        ModelInfo::new(1, "Xenova/bge-large-en-v1.5", &[InputType::Text]),
     ];
 
-    fn get_model_def(model_id: i32) -> Option<ModelDef> {
+    fn model_def(model_id: i32) -> Option<ModelDef> {
         match model_id {
             0 => Some(ModelDef {
                 model: &Self::MODELS[0],
@@ -55,7 +56,7 @@ impl Embedder for FastEmbedder {
             _ => bail!("Unsupported input type"),
         };
 
-        let model_def = Self::get_model_def(model_id)
+        let model_def = Self::model_def(model_id)
             .ok_or_else(|| anyhow::anyhow!("Invalid model ID: {}", model_id))?;
 
         FASTEMBED_MODELS.with(|cell| {
@@ -74,7 +75,7 @@ impl Embedder for FastEmbedder {
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
         let parsed = EmbeddingModel::from_str(model_name).ok()?;
 
-        for model_def in [Self::get_model_def(0), Self::get_model_def(1)]
+        for model_def in [Self::model_def(0), Self::model_def(1)]
             .into_iter()
             .flatten()
         {
@@ -86,11 +87,7 @@ impl Embedder for FastEmbedder {
     }
 
     fn supports_input_for_model(&self, model_id: i32, input_type: InputType) -> bool {
-        Self::MODELS
-            .iter()
-            .find(|m| m.id() == model_id)
-            .map(|m| m.supports_input_type(input_type))
-            .unwrap_or(false)
+        supports_input_for_model(Self::MODELS, model_id, input_type)
     }
 }
 

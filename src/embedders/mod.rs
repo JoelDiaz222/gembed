@@ -1,5 +1,7 @@
+mod embed_anything;
 mod fastembed;
 mod grpc;
+
 use anyhow::Result;
 use linkme::distributed_slice;
 
@@ -62,20 +64,20 @@ pub static EMBEDDERS: [&'static dyn Embedder] = [..];
 pub struct EmbedderRegistry;
 
 impl EmbedderRegistry {
-    pub fn get_embedder(id: i32) -> Option<&'static dyn Embedder> {
+    pub fn lookup_embedder(id: i32) -> Option<&'static dyn Embedder> {
         EMBEDDERS.iter().find(|e| e.id() == id).copied()
     }
 
-    pub fn get_embedder_id(name: &str) -> Option<i32> {
+    pub fn lookup_embedder_id(name: &str) -> Option<i32> {
         EMBEDDERS.iter().find(|e| e.name() == name).map(|e| e.id())
     }
 
-    pub fn validate_model(
+    pub fn validate_model_and_input_type(
         embedder_id: i32,
         model_name: &str,
         input_type: InputType,
     ) -> Option<i32> {
-        let embedder = Self::get_embedder(embedder_id)?;
+        let embedder = Self::lookup_embedder(embedder_id)?;
         let model_info = embedder.model_info(model_name)?;
         model_info
             .supports_input_type(input_type)
