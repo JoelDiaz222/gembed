@@ -8,13 +8,30 @@ use embed_anything::embeddings::local::text_embedding::ONNXModel;
 use linkme::distributed_slice;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs::write;
+use std::fs::{write, OpenOptions};
+use std::io::Write;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 pub static EMBED_ANYTHING_EMBEDDER_ID: i32 = 2;
 pub static EMBED_ANYTHING_EMBEDDER_NAME: &str = "embed_anything";
+
+// Logging helper
+fn log_to_file(msg: &str) {
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/pg_gembed_debug.log")
+    {
+        let _ = writeln!(
+            file,
+            "[{}] {}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+            msg
+        );
+    }
+}
 
 struct ModelDef {
     architecture: &'static str,
@@ -45,10 +62,13 @@ impl EmbedAnythingEmbedder {
     }
 
     fn runtime() -> Result<&'static Runtime> {
+        log_to_file("Creating/getting runtime");
         RUNTIME.with(|cell| {
             let mut runtime_opt = cell.borrow_mut();
             if runtime_opt.is_none() {
+                log_to_file("Initializing new tokio runtime");
                 *runtime_opt = Some(Runtime::new()?);
+                log_to_file("Tokio runtime initialized successfully");
             }
 
             // SAFETY: We're returning a reference that's tied to thread-local storage
@@ -58,31 +78,67 @@ impl EmbedAnythingEmbedder {
     }
 
     fn embedder(model_id: i32) -> Result<Arc<EAEmbedder>> {
+        log_to_file(&format!("Getting embedder for model_id: {}", model_id));
+
         let registration = Self::lookup_model_registration(model_id)
             .ok_or_else(|| anyhow!("Invalid model ID: {}", model_id))?;
+
+        log_to_file(&format!(
+            "Model registration found: {}",
+            registration.info.name()
+        ));
 
         let model_def = &registration.def;
 
         EMBED_ANYTHING_MODELS.with(|cell| {
             let mut models = cell.borrow_mut();
             if let Some(embedder) = models.get(&model_id) {
+                log_to_file("Using cached embedder");
                 return Ok(Arc::clone(embedder));
             }
+
+            log_to_file(&format!(
+                "Building new embedder with architecture: {}",
+                model_def.architecture
+            ));
 
             let builder = EmbedderBuilder::new().model_architecture(model_def.architecture);
 
             let embedder = if let Some(onnx_model) = model_def.onnx_model {
-                builder
+                log_to_file(&format!("Loading ONNX model: {:?}", onnx_model));
+                log_to_file(&format!("HF_HOME env: {:?}", std::env::var("HF_HOME")));
+
+                let result = builder
                     .onnx_model_id(Some(onnx_model))
-                    .from_pretrained_onnx()?
+                    .from_pretrained_onnx();
+
+                match &result {
+                    Ok(_) => log_to_file("ONNX model loaded successfully"),
+                    Err(e) => log_to_file(&format!("ONNX model loading failed: {}", e)),
+                }
+
+                result?
             } else if let Some(hf_id) = model_def.hf_model_id {
-                builder.model_id(Some(hf_id)).from_pretrained_hf()?
+                log_to_file(&format!("Loading HuggingFace model: {}", hf_id));
+                log_to_file(&format!("HF_HOME env: {:?}", std::env::var("HF_HOME")));
+
+                let result = builder.model_id(Some(hf_id)).from_pretrained_hf();
+
+                match &result {
+                    Ok(_) => log_to_file("HuggingFace model loaded successfully"),
+                    Err(e) => log_to_file(&format!("HuggingFace model loading failed: {}", e)),
+                }
+
+                result?
             } else {
+                log_to_file("ERROR: No model configuration found");
                 bail!("No model configuration found");
             };
 
+            log_to_file("Caching embedder");
             let arc_embedder = Arc::new(embedder);
             models.insert(model_id, Arc::clone(&arc_embedder));
+            log_to_file("Embedder cached successfully");
             Ok(arc_embedder)
         })
     }
@@ -98,16 +154,41 @@ impl Embedder for EmbedAnythingEmbedder {
     }
 
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
-        let embedder = Self::embedder(model_id)?;
-        let runtime = Self::runtime()?;
+        log_to_file(&format!("embed() called with model_id: {}", model_id));
 
-        match input {
-            Input::Texts(texts) => embed_texts(texts, &embedder, runtime),
-            Input::Image(image) => embed_image(image, &embedder, runtime),
-            Input::Multimodal { image, texts } => {
-                embed_multimodal(image, texts, &embedder, runtime)
+        let embedder = Self::embedder(model_id)?;
+        log_to_file("Embedder retrieved successfully");
+
+        let runtime = Self::runtime()?;
+        log_to_file("Runtime retrieved successfully");
+
+        let result = match input {
+            Input::Texts(ref texts) => {
+                log_to_file(&format!("Embedding {} text(s)", texts.len()));
+                embed_texts(texts.to_vec(), &embedder, runtime)
             }
+            Input::Image(image) => {
+                log_to_file(&format!("Embedding image ({} bytes)", image.len()));
+                embed_image(image, &embedder, runtime)
+            }
+            Input::Multimodal { image, ref texts } => {
+                log_to_file(&format!(
+                    "Embedding multimodal (image: {}, texts: {})",
+                    image.is_some(),
+                    texts.len()
+                ));
+                embed_multimodal(image, texts.to_vec(), &embedder, runtime)
+            }
+        };
+
+        match &result {
+            Ok((flat, n, d)) => {
+                log_to_file(&format!("Embedding successful: {} vectors of dim {}", n, d))
+            }
+            Err(e) => log_to_file(&format!("Embedding failed: {}", e)),
         }
+
+        result
     }
 
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
@@ -129,12 +210,19 @@ fn embed_texts(
     embedder: &Arc<EAEmbedder>,
     runtime: &Runtime,
 ) -> Result<(Vec<f32>, usize, usize)> {
+    log_to_file("embed_texts: Starting");
     let result = runtime.block_on(embedder.embed(&texts, None, None))?;
+    log_to_file("embed_texts: Embed completed");
 
     let vectors: Vec<Vec<f32>> = result
         .into_iter()
         .map(|e| e.to_dense())
         .collect::<Result<_, _>>()?;
+
+    log_to_file(&format!(
+        "embed_texts: Converted to {} dense vectors",
+        vectors.len()
+    ));
 
     flatten_vectors(vectors)
 }
