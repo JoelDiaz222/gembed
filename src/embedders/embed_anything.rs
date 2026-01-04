@@ -200,8 +200,22 @@ fn embed_multimodal(
 static EMBED_ANYTHING: &dyn Embedder = &EmbedAnythingEmbedder;
 
 #[distributed_slice(EMBED_ANYTHING_REGISTERED_MODELS)]
+static ALL_MINI_LM_L6_V2: ModelRegistration = ModelRegistration {
+    info: ModelInfo::new(
+        0,
+        "sentence-transformers/all-MiniLM-L6-v2",
+        &[InputType::Text],
+    ),
+    def: ModelDef {
+        architecture: "bert",
+        onnx_model: None,
+        hf_model_id: Some("sentence-transformers/all-MiniLM-L6-v2"),
+    },
+};
+
+#[distributed_slice(EMBED_ANYTHING_REGISTERED_MODELS)]
 static ALL_MINI_LM_L6_V2_ONNX: ModelRegistration = ModelRegistration {
-    info: ModelInfo::new(0, "Qdrant/all-MiniLM-L6-v2-onnx", &[InputType::Text]),
+    info: ModelInfo::new(1, "Qdrant/all-MiniLM-L6-v2-onnx", &[InputType::Text]),
     def: ModelDef {
         architecture: "bert",
         onnx_model: Some(ONNXModel::AllMiniLML6V2),
@@ -212,7 +226,7 @@ static ALL_MINI_LM_L6_V2_ONNX: ModelRegistration = ModelRegistration {
 #[distributed_slice(EMBED_ANYTHING_REGISTERED_MODELS)]
 static CLIP_VIT_BASE_PATCH32: ModelRegistration = ModelRegistration {
     info: ModelInfo::new(
-        1,
+        2,
         "openai/clip-vit-base-patch32",
         &[InputType::Text, InputType::Image, InputType::Multimodal],
     ),

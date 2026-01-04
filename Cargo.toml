@@ -11,6 +11,7 @@ default = ["embed_anything", "fastembed", "grpc"]
 
 embed_anything = [
     "dep:embed_anything",
+    "dep:tokio",
     "dep:tempfile"
 ]
 
@@ -26,7 +27,7 @@ grpc = [
 
 [dependencies]
 anyhow = "1.0.100"
-embed_anything = { version = "0.6.7", default-features = false, features = ["ort"], optional = true }
+embed_anything = { version = "0.6.7", features = ["ort"], optional = true }
 fastembed = { git = "https://github.com/JoelDiaz222/fastembed-rs", optional = true }
 linkme = "0.3.35"
 prost = { version = "0.14.1", optional = true }
