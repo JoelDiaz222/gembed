@@ -15,9 +15,9 @@ pub enum InputType {
 
 pub enum Input<'a> {
     Texts(Vec<&'a str>),
-    Image(&'a [u8]),
+    Images(Vec<&'a [u8]>),
     Multimodal {
-        image: Option<&'a [u8]>,
+        images: Vec<&'a [u8]>,
         texts: Vec<&'a str>,
     },
 }

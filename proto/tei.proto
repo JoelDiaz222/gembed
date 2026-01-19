@@ -57,6 +57,6 @@ message Embedding {
 
 message EmbedMultimodalRequest {
     optional string model = 1;
-    optional bytes image_bytes = 2;
+    repeated bytes images = 2;
     repeated string text_inputs = 3;
 }

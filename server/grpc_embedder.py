@@ -48,10 +48,10 @@ async def embed_texts_async(texts, model_name):
     return await loop.run_in_executor(executor, encode_func)
 
 
-def encode_multimodal(image_pil, text_inputs, model_name, pretrained):
+def encode_multimodal(images_pil, text_inputs, model_name, pretrained):
     """
-    Encode image and/or multiple texts using CLIP.
-    Returns list of normalized embeddings (one per input).
+    Encode images and/or multiple texts using CLIP.
+    Returns list of normalized embeddings (images first, then texts).
     """
     clip_components = get_clip_model(model_name, pretrained)
     model = clip_components["model"]
@@ -71,11 +71,14 @@ def encode_multimodal(image_pil, text_inputs, model_name, pretrained):
     )
 
     with torch.no_grad(), context_manager:
-        if image_pil is not None:
-            image_tensor = preprocess(image_pil).unsqueeze(0).to(device)
-            image_features = model.encode_image(image_tensor)
+        if images_pil:
+            # Process images in batch
+            image_tensors = [preprocess(img).unsqueeze(0) for img in images_pil]
+            image_batch = torch.cat(image_tensors).to(device)
+            image_features = model.encode_image(image_batch)
             image_features /= image_features.norm(dim=-1, keepdim=True)
-            embeddings.append(image_features.cpu().numpy()[0])
+            for feature in image_features:
+                embeddings.append(feature.cpu().numpy())
 
         if text_inputs:
             text_tensor = tokenizer(list(text_inputs)).to(device)
@@ -88,10 +91,10 @@ def encode_multimodal(image_pil, text_inputs, model_name, pretrained):
     return embeddings
 
 
-async def embed_multimodal_async(image_pil, text_inputs, model_name, pretrained):
+async def embed_multimodal_async(images_pil, text_inputs, model_name, pretrained):
     loop = asyncio.get_running_loop()
     encode_func = partial(
-        encode_multimodal, image_pil, text_inputs, model_name, pretrained
+        encode_multimodal, images_pil, text_inputs, model_name, pretrained
     )
     return await loop.run_in_executor(executor, encode_func)
 
@@ -121,8 +124,8 @@ class EmbedService(pb2_grpc.EmbedServicer):
 
     async def EmbedMultimodal(self, request, context):
         """
-        Handle multimodal embedding requests with optional image and/or multiple text inputs.
-        Returns one embedding per input (image embedding first if present, then text embeddings).
+        Handle multimodal embedding requests with optional images and/or multiple text inputs.
+        Returns one embedding per input (image embeddings first if present, then text embeddings).
         Uses open_clip for encoding.
         """
         model_name = request.model or "ViT-B-32"
@@ -132,30 +135,31 @@ class EmbedService(pb2_grpc.EmbedServicer):
         else:
             pretrained = "laion2b_s34b_b79k"
 
-        if not request.image_bytes and not request.text_inputs:
+        if not request.images and not request.text_inputs:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(
-                "At least one of image_bytes or text_inputs must be provided"
+                "At least one of images or text_inputs must be provided"
             )
             return pb2.EmbedBatchResponse()
 
         try:
-            image_pil = None
+            images_pil = []
             text_inputs = list(request.text_inputs) if request.text_inputs else []
 
-            if request.image_bytes:
+            if request.images:
                 try:
-                    image_pil = Image.open(io.BytesIO(request.image_bytes))
-
-                    if image_pil.mode != "RGB":
-                        image_pil = image_pil.convert("RGB")
+                    for img_bytes in request.images:
+                        img = Image.open(io.BytesIO(img_bytes))
+                        if img.mode != "RGB":
+                            img = img.convert("RGB")
+                        images_pil.append(img)
                 except Exception as e:
                     context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                     context.set_details(f"Failed to parse image: {str(e)}")
                     return pb2.EmbedBatchResponse()
 
             embeddings_list = await embed_multimodal_async(
-                image_pil, text_inputs, model_name, pretrained
+                images_pil, text_inputs, model_name, pretrained
             )
 
             response = pb2.EmbedBatchResponse()

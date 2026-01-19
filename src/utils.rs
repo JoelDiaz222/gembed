@@ -65,27 +65,35 @@ pub fn build_input(input_data: &'_ InputData) -> anyhow::Result<Input<'_>, c_int
             if input_data.binary_data.is_null() || input_data.n_binary == 0 {
                 return Err(ERR_EMPTY_INPUT);
             }
-            let image = unsafe {
-                let slice = &*input_data.binary_data;
-                if slice.ptr.is_null() || slice.len == 0 {
+
+            let slices =
+                unsafe { slice::from_raw_parts(input_data.binary_data, input_data.n_binary) };
+            let mut images = Vec::with_capacity(input_data.n_binary);
+            for s in slices {
+                if s.ptr.is_null() || s.len == 0 {
                     return Err(ERR_EMPTY_INPUT);
                 }
-                slice::from_raw_parts(slice.ptr, slice.len)
-            };
-            Input::Image(image)
+                let img = unsafe { slice::from_raw_parts(s.ptr, s.len) };
+                images.push(img);
+            }
+            Input::Images(images)
         }
         InputType::Multimodal => {
-            let image = if !input_data.binary_data.is_null() && input_data.n_binary > 0 {
+            let images = if !input_data.binary_data.is_null() && input_data.n_binary > 0 {
                 unsafe {
-                    let slice = &*input_data.binary_data;
-                    if slice.ptr.is_null() || slice.len == 0 {
-                        None
-                    } else {
-                        Some(slice::from_raw_parts(slice.ptr, slice.len))
+                    let slices = slice::from_raw_parts(input_data.binary_data, input_data.n_binary);
+                    let mut imgs = Vec::with_capacity(input_data.n_binary);
+                    for s in slices {
+                        if s.ptr.is_null() || s.len == 0 {
+                            // Skip invalid images or error out? Let's error out for now to be safe
+                            return Err(ERR_EMPTY_INPUT);
+                        }
+                        imgs.push(slice::from_raw_parts(s.ptr, s.len));
                     }
+                    imgs
                 }
             } else {
-                None
+                vec![]
             };
 
             let texts = if !input_data.text_data.is_null() && input_data.n_text > 0 {
@@ -97,13 +105,14 @@ pub fn build_input(input_data: &'_ InputData) -> anyhow::Result<Input<'_>, c_int
                 vec![]
             };
 
-            if image.is_none() && texts.is_empty() {
+            if images.is_empty() && texts.is_empty() {
                 return Err(ERR_EMPTY_INPUT);
             }
 
-            Input::Multimodal { image, texts }
+            Input::Multimodal { images, texts }
         }
     };
+
     Ok(input)
 }
 

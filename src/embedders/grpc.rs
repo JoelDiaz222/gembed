@@ -81,8 +81,8 @@ impl Embedder for GrpcEmbedder {
 
         match input {
             Input::Texts(texts) => embed_texts(texts, model_info),
-            Input::Image(image) => embed_image(image, model_info),
-            Input::Multimodal { image, texts } => embed_multimodal(image, texts, model_info),
+            Input::Images(images) => embed_images(images, model_info),
+            Input::Multimodal { images, texts } => embed_multimodal(images, texts, model_info),
         }
     }
 
@@ -125,31 +125,32 @@ fn embed_texts(texts: Vec<&str>, model_info: &ModelInfo) -> Result<(Vec<f32>, us
     flatten_vectors(embeddings)
 }
 
-fn embed_image(image: &[u8], model_info: &ModelInfo) -> Result<(Vec<f32>, usize, usize)> {
+fn embed_images(images: Vec<&[u8]>, model_info: &ModelInfo) -> Result<(Vec<f32>, usize, usize)> {
     let mut client = GrpcEmbedder::grpc_client()?;
-
+    
     let response = RUNTIME.block_on(async {
         let request = EmbedMultimodalRequest {
             model: Some(model_info.name().to_string()),
-            image_bytes: Some(image.to_vec()),
+            images: images.iter().map(|&img| img.to_vec()).collect(),
             text_inputs: vec![],
         };
-        client.embed_multimodal(tonic::Request::new(request)).await
+        client
+            .embed_multimodal(tonic::Request::new(request))
+            .await
     })?;
 
-    let embeddings = response.into_inner().embeddings;
-    let first = embeddings
-        .first()
-        .ok_or_else(|| anyhow!("No embedding returned"))?;
+    let embeddings: Vec<Vec<f32>> = response
+        .into_inner()
+        .embeddings
+        .into_iter()
+        .map(|e| e.values)
+        .collect();
 
-    let dim = first.values.len();
-    let embedding = first.values.clone();
-
-    Ok((embedding, 1, dim))
+    flatten_vectors(embeddings)
 }
 
 fn embed_multimodal(
-    image: Option<&[u8]>,
+    images: Vec<&[u8]>,
     texts: Vec<&str>,
     model_info: &ModelInfo,
 ) -> Result<(Vec<f32>, usize, usize)> {
@@ -158,7 +159,7 @@ fn embed_multimodal(
     let response = RUNTIME.block_on(async {
         let request = EmbedMultimodalRequest {
             model: Some(model_info.name().to_string()),
-            image_bytes: image.map(|b| b.to_vec()),
+            images: images.iter().map(|&b| b.to_vec()).collect(),
             text_inputs: texts.iter().map(|&s| s.to_string()).collect(),
         };
         client.embed_multimodal(tonic::Request::new(request)).await
@@ -185,11 +186,8 @@ static ALL_MINI_LM_L6_V2: ModelInfo = ModelInfo::new(
 );
 
 #[distributed_slice(GRPC_REGISTERED_MODELS)]
-static BGE_LARGE_EN_V1_5: ModelInfo = ModelInfo::new(
-    1,
-    "sentence-transformers/bge-large-en-v1.5",
-    &[InputType::Text],
-);
+static ALL_MINI_LM_L6_V2_ONNX: ModelInfo =
+    ModelInfo::new(1, "Qdrant/all-MiniLM-L6-v2-onnx", &[InputType::Text]);
 
 #[distributed_slice(GRPC_REGISTERED_MODELS)]
 static VIT_B_32: ModelInfo = ModelInfo::new(

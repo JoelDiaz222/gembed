@@ -103,9 +103,9 @@ impl Embedder for EmbedAnythingEmbedder {
 
         match input {
             Input::Texts(texts) => embed_texts(texts, &embedder, runtime),
-            Input::Image(image) => embed_image(image, &embedder, runtime),
-            Input::Multimodal { image, texts } => {
-                embed_multimodal(image, texts, &embedder, runtime)
+            Input::Images(images) => embed_images(images, &embedder, runtime),
+            Input::Multimodal { images, texts } => {
+                embed_multimodal(images, texts, &embedder, runtime)
             }
         }
     }
@@ -139,17 +139,23 @@ fn embed_texts(
     flatten_vectors(vectors)
 }
 
-fn embed_image(
-    image: &[u8],
+fn embed_images(
+    images: Vec<&[u8]>,
     embedder: &Arc<EAEmbedder>,
     runtime: &Runtime,
 ) -> Result<(Vec<f32>, usize, usize)> {
+    if images.is_empty() {
+        return Ok((vec![], 0, 0));
+    }
+
     let tmp_dir = TempDir::new()?;
     let tmp_path = tmp_dir.path();
 
-    let extension = detect_image_format(image)?;
-    let file_path = tmp_path.join(format!("image.{}", extension));
-    write(&file_path, image)?;
+    for (i, image) in images.iter().enumerate() {
+        let extension = detect_image_format(image)?;
+        let file_path = tmp_path.join(format!("{:06}.{}", i, extension));
+        write(&file_path, image)?;
+    }
 
     let result = runtime
         .block_on(embed_image_directory(
@@ -160,36 +166,49 @@ fn embed_image(
         ))?
         .ok_or_else(|| anyhow!("No images were processed"))?;
 
-    let embedding = result
+    // Sort results by filename to ensure order matches input
+    let mut embeddings_with_idx: Vec<(usize, Vec<f32>)> = result
         .into_iter()
-        .next()
-        .ok_or_else(|| anyhow!("No embedding returned"))?
-        .embedding
-        .to_dense()?;
+        .map(|e| {
+            let metadata = e.metadata.as_ref();
+            let filename_str = metadata
+                .and_then(|m| m.get("file_name"))
+                .ok_or_else(|| anyhow!("Missing file_name in metadata"))?;
 
-    let dim = embedding.len();
-    Ok((embedding, 1, dim))
+            let stem = std::path::Path::new(filename_str)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| anyhow!("Invalid filename in metadata: {}", filename_str))?;
+
+            let idx = stem.parse()?;
+            Ok((idx, e.embedding.to_dense()?))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    embeddings_with_idx.sort_by_key(|k| k.0);
+    let vectors: Vec<Vec<f32>> = embeddings_with_idx.into_iter().map(|(_, v)| v).collect();
+    flatten_vectors(vectors)
 }
 
 fn embed_multimodal(
-    image: Option<&[u8]>,
+    images: Vec<&[u8]>,
     texts: Vec<&str>,
     embedder: &Arc<EAEmbedder>,
     runtime: &Runtime,
 ) -> Result<(Vec<f32>, usize, usize)> {
     let mut all_embeddings = Vec::new();
 
-    if let Some(img_bytes) = image {
-        let (img_embedding, _, _) = embed_image(img_bytes, embedder, runtime)?;
-        all_embeddings.push(img_embedding);
+    if !images.is_empty() {
+        let (img_embeddings, n_img, dim) = embed_images(images, embedder, runtime)?;
+        for i in 0..n_img {
+            all_embeddings.push(img_embeddings[i * dim..(i + 1) * dim].to_vec());
+        }
     }
 
     if !texts.is_empty() {
         let (text_embeddings, n_text, dim) = embed_texts(texts, embedder, runtime)?;
         for i in 0..n_text {
-            let start = i * dim;
-            let end = start + dim;
-            all_embeddings.push(text_embeddings[start..end].to_vec());
+            all_embeddings.push(text_embeddings[i * dim..(i + 1) * dim].to_vec());
         }
     }
 
