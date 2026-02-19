@@ -107,6 +107,7 @@ impl Embedder for EmbedAnythingEmbedder {
             Input::Multimodal { images, texts } => {
                 embed_multimodal(images, texts, &embedder, runtime)
             }
+            Input::ImageDirectories(paths) => embed_image_directories(paths, &embedder, runtime),
         }
     }
 
@@ -122,6 +123,31 @@ impl Embedder for EmbedAnythingEmbedder {
             .map(|reg| reg.info.supports_input_type(input_type))
             .unwrap_or(false)
     }
+}
+
+fn embed_image_directories(
+    paths: Vec<&str>,
+    embedder: &Arc<EAEmbedder>,
+    runtime: &Runtime,
+) -> Result<(Vec<f32>, usize, usize)> {
+    let mut all_embeddings = Vec::new();
+
+    for path in paths {
+        let result = runtime
+            .block_on(embed_image_directory(
+                std::path::PathBuf::from(path),
+                embedder,
+                None,
+                None,
+            ))?
+            .ok_or_else(|| anyhow!("No images were processed in directory: {}", path))?;
+
+        for e in result {
+            all_embeddings.push(e.embedding.to_dense()?);
+        }
+    }
+
+    flatten_vectors(all_embeddings)
 }
 
 fn embed_texts(
@@ -206,8 +232,8 @@ fn embed_multimodal(
     }
 
     if !texts.is_empty() {
-        let (text_embeddings, n_text, dim) = embed_texts(texts, embedder, runtime)?;
-        for i in 0..n_text {
+        let (text_embeddings, n_texts, dim) = embed_texts(texts, embedder, runtime)?;
+        for i in 0..n_texts {
             all_embeddings.push(text_embeddings[i * dim..(i + 1) * dim].to_vec());
         }
     }
@@ -247,7 +273,12 @@ static CLIP_VIT_BASE_PATCH32: ModelRegistration = ModelRegistration {
     info: ModelInfo::new(
         2,
         "openai/clip-vit-base-patch32",
-        &[InputType::Text, InputType::Image, InputType::Multimodal],
+        &[
+            InputType::Text,
+            InputType::Image,
+            InputType::Multimodal,
+            InputType::ImageDirectory,
+        ],
     ),
     def: ModelDef {
         architecture: "clip",

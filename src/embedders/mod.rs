@@ -11,6 +11,7 @@ pub enum InputType {
     Text = 0,
     Image = 1,
     Multimodal = 2,
+    ImageDirectory = 3,
 }
 
 pub enum Input<'a> {
@@ -20,6 +21,7 @@ pub enum Input<'a> {
         images: Vec<&'a [u8]>,
         texts: Vec<&'a str>,
     },
+    ImageDirectories(Vec<&'a str>),
 }
 
 pub struct ModelInfo {

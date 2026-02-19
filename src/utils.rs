@@ -29,9 +29,9 @@ pub struct ByteSlice {
 pub struct InputData {
     pub input_type: InputType,
     pub binary_data: *const ByteSlice,
-    pub n_binary: usize,
+    pub n_binaries: usize,
     pub text_data: *const StringSlice,
-    pub n_text: usize,
+    pub n_texts: usize,
 }
 
 #[repr(C)]
@@ -52,23 +52,23 @@ where
 pub fn build_input(input_data: &'_ InputData) -> anyhow::Result<Input<'_>, c_int> {
     let input = match input_data.input_type {
         InputType::Text => {
-            if input_data.text_data.is_null() || input_data.n_text == 0 {
+            if input_data.text_data.is_null() || input_data.n_texts == 0 {
                 return Err(ERR_EMPTY_INPUT);
             }
-            let texts = match unsafe { get_text_slices(input_data.text_data, input_data.n_text) } {
+            let texts = match unsafe { get_text_slices(input_data.text_data, input_data.n_texts) } {
                 Ok(v) => v,
                 Err(_) => return Err(ERR_INVALID_UTF8),
             };
             Input::Texts(texts)
         }
         InputType::Image => {
-            if input_data.binary_data.is_null() || input_data.n_binary == 0 {
+            if input_data.binary_data.is_null() || input_data.n_binaries == 0 {
                 return Err(ERR_EMPTY_INPUT);
             }
 
             let slices =
-                unsafe { slice::from_raw_parts(input_data.binary_data, input_data.n_binary) };
-            let mut images = Vec::with_capacity(input_data.n_binary);
+                unsafe { slice::from_raw_parts(input_data.binary_data, input_data.n_binaries) };
+            let mut images = Vec::with_capacity(input_data.n_binaries);
             for s in slices {
                 if s.ptr.is_null() || s.len == 0 {
                     return Err(ERR_EMPTY_INPUT);
@@ -79,13 +79,13 @@ pub fn build_input(input_data: &'_ InputData) -> anyhow::Result<Input<'_>, c_int
             Input::Images(images)
         }
         InputType::Multimodal => {
-            let images = if !input_data.binary_data.is_null() && input_data.n_binary > 0 {
+            let images = if !input_data.binary_data.is_null() && input_data.n_binaries > 0 {
                 unsafe {
-                    let slices = slice::from_raw_parts(input_data.binary_data, input_data.n_binary);
-                    let mut imgs = Vec::with_capacity(input_data.n_binary);
+                    let slices =
+                        slice::from_raw_parts(input_data.binary_data, input_data.n_binaries);
+                    let mut imgs = Vec::with_capacity(input_data.n_binaries);
                     for s in slices {
                         if s.ptr.is_null() || s.len == 0 {
-                            // Skip invalid images or error out? Let's error out for now to be safe
                             return Err(ERR_EMPTY_INPUT);
                         }
                         imgs.push(slice::from_raw_parts(s.ptr, s.len));
@@ -96,8 +96,8 @@ pub fn build_input(input_data: &'_ InputData) -> anyhow::Result<Input<'_>, c_int
                 vec![]
             };
 
-            let texts = if !input_data.text_data.is_null() && input_data.n_text > 0 {
-                match unsafe { get_text_slices(input_data.text_data, input_data.n_text) } {
+            let texts = if !input_data.text_data.is_null() && input_data.n_texts > 0 {
+                match unsafe { get_text_slices(input_data.text_data, input_data.n_texts) } {
                     Ok(v) => v,
                     Err(_) => return Err(ERR_INVALID_UTF8),
                 }
@@ -110,6 +110,16 @@ pub fn build_input(input_data: &'_ InputData) -> anyhow::Result<Input<'_>, c_int
             }
 
             Input::Multimodal { images, texts }
+        }
+        InputType::ImageDirectory => {
+            if input_data.text_data.is_null() || input_data.n_texts == 0 {
+                return Err(ERR_EMPTY_INPUT);
+            }
+            let paths = match unsafe { get_text_slices(input_data.text_data, input_data.n_texts) } {
+                Ok(v) => v,
+                Err(_) => return Err(ERR_INVALID_UTF8),
+            };
+            Input::ImageDirectories(paths)
         }
     };
 

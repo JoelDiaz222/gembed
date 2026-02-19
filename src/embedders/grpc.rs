@@ -4,7 +4,7 @@ use crate::embedders::grpc::tei::v1::EmbedBatchRequest;
 use crate::embedders::grpc::tei::v1::EmbedMultimodalRequest;
 use crate::embedders::{Embedder, Input, InputType, ModelInfo, EMBEDDERS};
 use crate::utils::flatten_vectors;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use linkme::distributed_slice;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -59,7 +59,11 @@ impl GrpcEmbedder {
             let mut client_opt = cell.borrow_mut();
             if client_opt.is_none() {
                 let channel = RUNTIME.block_on(ENDPOINT.connect())?;
-                *client_opt = Some(EmbedClient::new(channel));
+                *client_opt = Some(
+                    EmbedClient::new(channel)
+                        .max_decoding_message_size(usize::MAX)
+                        .max_encoding_message_size(usize::MAX),
+                );
             }
             Ok(client_opt.as_ref().unwrap().clone())
         })
@@ -83,6 +87,7 @@ impl Embedder for GrpcEmbedder {
             Input::Texts(texts) => embed_texts(texts, model_info),
             Input::Images(images) => embed_images(images, model_info),
             Input::Multimodal { images, texts } => embed_multimodal(images, texts, model_info),
+            _ => bail!("Unsupported input type"),
         }
     }
 
@@ -127,16 +132,14 @@ fn embed_texts(texts: Vec<&str>, model_info: &ModelInfo) -> Result<(Vec<f32>, us
 
 fn embed_images(images: Vec<&[u8]>, model_info: &ModelInfo) -> Result<(Vec<f32>, usize, usize)> {
     let mut client = GrpcEmbedder::grpc_client()?;
-    
+
     let response = RUNTIME.block_on(async {
         let request = EmbedMultimodalRequest {
             model: Some(model_info.name().to_string()),
             images: images.iter().map(|&img| img.to_vec()).collect(),
             text_inputs: vec![],
         };
-        client
-            .embed_multimodal(tonic::Request::new(request))
-            .await
+        client.embed_multimodal(tonic::Request::new(request)).await
     })?;
 
     let embeddings: Vec<Vec<f32>> = response
