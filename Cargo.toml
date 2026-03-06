@@ -7,12 +7,14 @@ edition = "2024"
 crate-type = ["staticlib"]
 
 [features]
-default = ["embed_anything", "fastembed", "grpc"]
+default = ["embed_anything"]
 
 embed_anything = [
     "dep:embed_anything",
     "dep:tokio",
-    "dep:tempfile"
+    "dep:tempfile",
+    "dep:candle-core",
+    "dep:candle-nn",
 ]
 
 fastembed = ["dep:fastembed"]
@@ -27,7 +29,7 @@ grpc = [
 
 [dependencies]
 anyhow = "1.0.100"
-embed_anything = { version = "0.6.7", features = ["ort"], optional = true }
+embed_anything = { version = "0.6.7", optional = true }
 fastembed = { git = "https://github.com/JoelDiaz222/fastembed-rs", optional = true }
 linkme = "0.3.35"
 prost = { version = "0.14.1", optional = true }
@@ -35,6 +37,8 @@ tonic = { version = "0.14.2", optional = true }
 tokio = { version = "1.48.0", features = ["rt-multi-thread"], optional = true }
 tonic-prost = { version = "0.14.2", optional = true }
 tempfile = { version = "3.24.0", optional = true }
+candle-core = { version = "=0.9.1", optional = true }
+candle-nn = { version = "=0.9.1", optional = true }
 
 [build-dependencies]
 tonic-prost-build = { version = "0.14.2", optional = true }
