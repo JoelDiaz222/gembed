@@ -259,12 +259,12 @@ static ALL_MINI_LM_L6_V2: ModelRegistration = ModelRegistration {
 };
 
 #[distributed_slice(EMBED_ANYTHING_REGISTERED_MODELS)]
-static ALL_MINI_LM_L6_V2_ONNX: ModelRegistration = ModelRegistration {
-    info: ModelInfo::new(1, "Qdrant/all-MiniLM-L6-v2-onnx", &[InputType::Text]),
+static BGE_LARGE_EN_V15: ModelRegistration = ModelRegistration {
+    info: ModelInfo::new(1, "BAAI/bge-large-en-v1.5", &[InputType::Text]),
     def: ModelDef {
         architecture: "bert",
-        onnx_model: Some(ONNXModel::AllMiniLML6V2),
-        hf_model_id: None,
+        onnx_model: None,
+        hf_model_id: Some("BAAI/bge-large-en-v1.5"),
     },
 };
 
