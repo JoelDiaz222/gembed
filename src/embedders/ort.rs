@@ -36,8 +36,25 @@ pub static ORT_EMBEDDER_NAME: &str = "ort";
 
 const DEFAULT_MODEL_BASE_DIR: &str = "/path/to/onnx_models";
 
+enum Normalization {
+    /// CLIP: pixel / 255 * 2 - 1  →  [-1, 1]
+    Affine,
+    /// SigLIP: (pixel / 255 - mean) / std
+    MeanStd { mean: [f32; 3], std: [f32; 3] },
+}
+
+struct ModelDef {
+    image_size: usize,
+    normalization: Normalization,
+}
+
+struct ModelRegistration {
+    info: ModelInfo,
+    def: ModelDef,
+}
+
 #[distributed_slice]
-pub static ORT_REGISTERED_MODELS: [ModelInfo] = [..];
+pub static ORT_REGISTERED_MODELS: [ModelRegistration] = [..];
 
 thread_local! {
     static ORT_SESSIONS: RefCell<HashMap<i32, Session>> = RefCell::new(HashMap::new());
@@ -46,10 +63,10 @@ thread_local! {
 struct OrtEmbedder;
 
 impl OrtEmbedder {
-    fn lookup_model_registration(model_id: i32) -> Option<&'static ModelInfo> {
+    fn lookup_model_registration(model_id: i32) -> Option<&'static ModelRegistration> {
         ORT_REGISTERED_MODELS
             .iter()
-            .find(|m| m.id() == model_id)
+            .find(|m| m.info.id() == model_id)
     }
 
     fn model_path(model_name: &str) -> PathBuf {
@@ -58,29 +75,32 @@ impl OrtEmbedder {
             .join("model.onnx")
     }
 
-    fn preprocess(image_path: &Path) -> Result<Vec<f32>> {
+    fn preprocess(image_path: &Path, def: &ModelDef) -> Result<Vec<f32>> {
+        let size = def.image_size as u32;
         let img = image::open(image_path)?
-            .resize_to_fill(224, 224, FilterType::Triangle)
+            .resize_to_fill(size, size, FilterType::Triangle)
             .to_rgb8();
 
-        let mut data = vec![0f32; 3 * 224 * 224];
+        let n = def.image_size;
+        let mut data = vec![0f32; 3 * n * n];
         for (x, y, pixel) in img.enumerate_pixels() {
             for c in 0..3 {
-                data[c * 224 * 224 + y as usize * 224 + x as usize] =
-                    (pixel[c] as f32 / 255.0) * 2.0 - 1.0;
+                let val = pixel[c] as f32 / 255.0;
+                data[c * n * n + y as usize * n + x as usize] = match &def.normalization {
+                    Normalization::Affine => val * 2.0 - 1.0,
+                    Normalization::MeanStd { mean, std } => (val - mean[c]) / std[c],
+                };
             }
         }
         Ok(data)
     }
 
-    fn embed_image(session: &mut Session, path: &Path) -> Result<Vec<f32>> {
-        let data = Self::preprocess(path)?;
-        let input_value = Value::from_array(([1usize, 3, 224, 224], data.into_boxed_slice()))?;
+    fn embed_image(session: &mut Session, path: &Path, def: &ModelDef) -> Result<Vec<f32>> {
+        let n = def.image_size;
+        let data = Self::preprocess(path, def)?;
+        let input_value = Value::from_array(([1usize, 3, n, n], data.into_boxed_slice()))?;
         let input_name = session.inputs[0].name.clone();
-        let outputs = session.run(HashMap::from([(
-            input_name.as_str(),
-            input_value,
-        )]))?;
+        let outputs = session.run(HashMap::from([(input_name.as_str(), input_value)]))?;
 
         let output = outputs.iter().next().unwrap().1;
         let (shape, data) = output.try_extract_tensor::<f32>()?;
@@ -90,7 +110,9 @@ impl OrtEmbedder {
             [_, _seq, dim] => data[..*dim].to_vec(),
             _ => bail!("Unexpected output shape: {:?}", shape),
         };
-        Ok(embedding)
+
+        let norm = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+        Ok(embedding.iter().map(|x| x / norm).collect())
     }
 }
 
@@ -104,22 +126,23 @@ impl Embedder for OrtEmbedder {
     }
 
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
-        let model_info = Self::lookup_model_registration(model_id)
+        let registration = Self::lookup_model_registration(model_id)
             .ok_or_else(|| anyhow::anyhow!("Invalid model ID: {}", model_id))?;
 
         ORT_SESSIONS.with(|cell| {
             let mut sessions = cell.borrow_mut();
             if !sessions.contains_key(&model_id) {
-                let path = Self::model_path(model_info.name());
+                let path = Self::model_path(registration.info.name());
                 let session = Session::builder()?.commit_from_file(&path)?;
                 sessions.insert(model_id, session);
             }
 
             let session = sessions.get_mut(&model_id).unwrap();
+            let def = &registration.def;
 
             match input {
-                Input::Images(images) => embed_images(session, images),
-                Input::ImageDirectories(paths) => embed_image_directories(session, paths),
+                Input::Images(images) => embed_images(session, images, def),
+                Input::ImageDirectories(paths) => embed_image_directories(session, paths, def),
                 _ => bail!("Input type not supported"),
             }
         })
@@ -128,17 +151,22 @@ impl Embedder for OrtEmbedder {
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
         ORT_REGISTERED_MODELS
             .iter()
-            .find(|m| m.name() == model_name)
+            .find(|m| m.info.name() == model_name)
+            .map(|m| &m.info)
     }
 
     fn supports_input_for_model(&self, model_id: i32, input_type: InputType) -> bool {
         Self::lookup_model_registration(model_id)
-            .map(|m| m.supports_input_type(input_type))
+            .map(|m| m.info.supports_input_type(input_type))
             .unwrap_or(false)
     }
 }
 
-fn embed_images(session: &mut Session, images: Vec<&[u8]>) -> Result<(Vec<f32>, usize, usize)> {
+fn embed_images(
+    session: &mut Session,
+    images: Vec<&[u8]>,
+    def: &ModelDef,
+) -> Result<(Vec<f32>, usize, usize)> {
     if images.is_empty() {
         return Ok((vec![], 0, 0));
     }
@@ -160,7 +188,7 @@ fn embed_images(session: &mut Session, images: Vec<&[u8]>) -> Result<(Vec<f32>, 
 
     let mut all_embeddings = Vec::new();
     for path in &image_paths {
-        all_embeddings.push(OrtEmbedder::embed_image(session, path)?);
+        all_embeddings.push(OrtEmbedder::embed_image(session, path, def)?);
     }
 
     flatten_vectors(all_embeddings)
@@ -169,6 +197,7 @@ fn embed_images(session: &mut Session, images: Vec<&[u8]>) -> Result<(Vec<f32>, 
 fn embed_image_directories(
     session: &mut Session,
     paths: Vec<&str>,
+    def: &ModelDef,
 ) -> Result<(Vec<f32>, usize, usize)> {
     let mut all_embeddings = Vec::new();
 
@@ -192,7 +221,7 @@ fn embed_image_directories(
             .collect();
 
         for image_path in &image_paths {
-            all_embeddings.push(OrtEmbedder::embed_image(session, image_path)?);
+            all_embeddings.push(OrtEmbedder::embed_image(session, image_path, def)?);
         }
     }
 
@@ -203,8 +232,43 @@ fn embed_image_directories(
 static ORT: &dyn Embedder = &OrtEmbedder;
 
 #[distributed_slice(ORT_REGISTERED_MODELS)]
-static CLIP_VIT_BASE_PATCH32: ModelInfo = ModelInfo::new(
-    0,
-    "openai/clip-vit-base-patch32",
-    &[InputType::Image, InputType::ImageDirectory],
-);
+static CLIP_VIT_BASE_PATCH32: ModelRegistration = ModelRegistration {
+    info: ModelInfo::new(
+        0,
+        "openai/clip-vit-base-patch32",
+        &[InputType::Image, InputType::ImageDirectory],
+    ),
+    def: ModelDef {
+        image_size: 224,
+        normalization: Normalization::Affine,
+    },
+};
+
+#[distributed_slice(ORT_REGISTERED_MODELS)]
+static CLIP_VIT_LARGE_PATCH14: ModelRegistration = ModelRegistration {
+    info: ModelInfo::new(
+        1,
+        "openai/clip-vit-large-patch14",
+        &[InputType::Image, InputType::ImageDirectory],
+    ),
+    def: ModelDef {
+        image_size: 224,
+        normalization: Normalization::Affine,
+    },
+};
+
+#[distributed_slice(ORT_REGISTERED_MODELS)]
+static SIGLIP_LARGE_PATCH16_384: ModelRegistration = ModelRegistration {
+    info: ModelInfo::new(
+        2,
+        "google/siglip-large-patch16-384",
+        &[InputType::Image, InputType::ImageDirectory],
+    ),
+    def: ModelDef {
+        image_size: 384,
+        normalization: Normalization::MeanStd {
+            mean: [0.5, 0.5, 0.5],
+            std: [0.5, 0.5, 0.5],
+        },
+    },
+};

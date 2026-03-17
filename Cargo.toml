@@ -15,7 +15,7 @@ embed_anything = [
     "dep:tempfile",
     "dep:candle-core",
     "dep:candle-nn",
-    "candle-transformers"
+    "dep:candle-transformers"
 ]
 
 fastembed = ["dep:fastembed"]

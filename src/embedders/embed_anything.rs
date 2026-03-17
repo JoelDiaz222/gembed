@@ -286,3 +286,41 @@ static CLIP_VIT_BASE_PATCH32: ModelRegistration = ModelRegistration {
         hf_model_id: Some("openai/clip-vit-base-patch32"),
     },
 };
+
+#[distributed_slice(EMBED_ANYTHING_REGISTERED_MODELS)]
+static CLIP_VIT_LARGE_PATCH14: ModelRegistration = ModelRegistration {
+    info: ModelInfo::new(
+        3,
+        "openai/clip-vit-large-patch14",
+        &[
+            InputType::Text,
+            InputType::Image,
+            InputType::Multimodal,
+            InputType::ImageDirectory,
+        ],
+    ),
+    def: ModelDef {
+        architecture: "clip",
+        onnx_model: None,
+        hf_model_id: Some("openai/clip-vit-large-patch14"),
+    },
+};
+
+#[distributed_slice(EMBED_ANYTHING_REGISTERED_MODELS)]
+static SIGLIP_LARGE_PATCH16_384: ModelRegistration = ModelRegistration {
+    info: ModelInfo::new(
+        4,
+        "google/siglip-large-patch16-384",
+        &[
+            InputType::Text,
+            InputType::Image,
+            InputType::Multimodal,
+            InputType::ImageDirectory,
+        ],
+    ),
+    def: ModelDef {
+        architecture: "siglip",
+        onnx_model: None,
+        hf_model_id: Some("google/siglip-large-patch16-384"),
+    },
+};
