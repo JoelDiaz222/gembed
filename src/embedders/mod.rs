@@ -2,6 +2,7 @@ mod embed_anything;
 mod fastembed;
 mod grpc;
 mod http;
+mod ort;
 
 use anyhow::Result;
 use linkme::distributed_slice;
