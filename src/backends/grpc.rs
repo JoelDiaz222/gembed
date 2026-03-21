@@ -1,8 +1,8 @@
 #![cfg(feature = "grpc")]
-use crate::embedders::grpc::tei::v1::embed_client::EmbedClient;
-use crate::embedders::grpc::tei::v1::EmbedBatchRequest;
-use crate::embedders::grpc::tei::v1::EmbedMultimodalRequest;
-use crate::embedders::{Embedder, Input, InputType, ModelInfo, EMBEDDERS};
+use crate::backends::grpc::tei::v1::embed_client::EmbedClient;
+use crate::backends::grpc::tei::v1::EmbedBatchRequest;
+use crate::backends::grpc::tei::v1::EmbedMultimodalRequest;
+use crate::backends::{Backend, Input, InputType, ModelInfo, BACKENDS};
 use crate::utils::flatten_vectors;
 use anyhow::{anyhow, bail, Result};
 use linkme::distributed_slice;
@@ -17,8 +17,8 @@ pub mod tei {
     }
 }
 
-pub static GRPC_EMBEDDER_ID: i32 = 1;
-pub static GRPC_EMBEDDER_NAME: &str = "grpc";
+pub static GRPC_BACKEND_ID: i32 = 1;
+pub static GRPC_BACKEND_NAME: &str = "grpc";
 
 #[distributed_slice]
 pub static GRPC_REGISTERED_MODELS: [ModelInfo] = [..];
@@ -31,7 +31,7 @@ static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
 });
 
 static ENDPOINT: LazyLock<Endpoint> = LazyLock::new(|| {
-    let url = std::env::var("GRPC_EMBEDDER_ENDPOINT")
+    let url = std::env::var("GRPC_BACKEND_ENDPOINT")
         .unwrap_or_else(|_| "http://127.0.0.1:50051".to_string());
 
     Channel::from_shared(url)
@@ -47,9 +47,9 @@ thread_local! {
     static CLIENT: std::cell::RefCell<Option<EmbedClient<Channel>>> = std::cell::RefCell::new(None);
 }
 
-struct GrpcEmbedder;
+struct GrpcBackend;
 
-impl GrpcEmbedder {
+impl GrpcBackend {
     fn lookup_model_registration(model_id: i32) -> Option<&'static ModelInfo> {
         GRPC_REGISTERED_MODELS.iter().find(|m| m.id() == model_id)
     }
@@ -70,13 +70,13 @@ impl GrpcEmbedder {
     }
 }
 
-impl Embedder for GrpcEmbedder {
+impl Backend for GrpcBackend {
     fn id(&self) -> i32 {
-        GRPC_EMBEDDER_ID
+        GRPC_BACKEND_ID
     }
 
     fn name(&self) -> &'static str {
-        GRPC_EMBEDDER_NAME
+        GRPC_BACKEND_NAME
     }
 
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
@@ -105,7 +105,7 @@ impl Embedder for GrpcEmbedder {
 }
 
 fn embed_texts(texts: Vec<&str>, model_info: &ModelInfo) -> Result<(Vec<f32>, usize, usize)> {
-    let mut client = GrpcEmbedder::grpc_client()?;
+    let mut client = GrpcBackend::grpc_client()?;
 
     let response = RUNTIME.block_on(async {
         let request = EmbedBatchRequest {
@@ -131,7 +131,7 @@ fn embed_texts(texts: Vec<&str>, model_info: &ModelInfo) -> Result<(Vec<f32>, us
 }
 
 fn embed_images(images: Vec<&[u8]>, model_info: &ModelInfo) -> Result<(Vec<f32>, usize, usize)> {
-    let mut client = GrpcEmbedder::grpc_client()?;
+    let mut client = GrpcBackend::grpc_client()?;
 
     let response = RUNTIME.block_on(async {
         let request = EmbedMultimodalRequest {
@@ -157,7 +157,7 @@ fn embed_multimodal(
     texts: Vec<&str>,
     model_info: &ModelInfo,
 ) -> Result<(Vec<f32>, usize, usize)> {
-    let mut client = GrpcEmbedder::grpc_client()?;
+    let mut client = GrpcBackend::grpc_client()?;
 
     let response = RUNTIME.block_on(async {
         let request = EmbedMultimodalRequest {
@@ -178,8 +178,8 @@ fn embed_multimodal(
     flatten_vectors(embeddings)
 }
 
-#[linkme::distributed_slice(EMBEDDERS)]
-static GRPC: &dyn Embedder = &GrpcEmbedder;
+#[linkme::distributed_slice(BACKENDS)]
+static GRPC: &dyn Backend = &GrpcBackend;
 
 #[distributed_slice(GRPC_REGISTERED_MODELS)]
 static ALL_MINI_LM_L6_V2: ModelInfo = ModelInfo::new(

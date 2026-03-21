@@ -1,4 +1,4 @@
-use crate::embedders::{Input, InputType};
+use crate::backends::{Input, InputType};
 use crate::get_text_slices;
 use anyhow::anyhow;
 use std::os::raw::{c_char, c_float, c_int};
@@ -10,7 +10,7 @@ pub const GENERIC_ERROR: c_int = -1;
 pub const ERR_INVALID_POINTER: c_int = -2;
 pub const ERR_EMPTY_INPUT: c_int = -3;
 pub const ERR_INVALID_UTF8: c_int = -4;
-pub const ERR_INVALID_EMBEDDER: c_int = -5;
+pub const ERR_INVALID_BACKEND: c_int = -5;
 pub const ERR_MODEL_NOT_ALLOWED: c_int = -6;
 
 #[repr(C)]

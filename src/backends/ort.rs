@@ -1,6 +1,6 @@
 // Setup:
 //
-// In order for this embedder to work, the official Microsoft ONNX Runtime release has to be
+// In order for this backend to work, the official Microsoft ONNX Runtime release has to be
 // downloaded:
 //
 //    wget https://github.com/microsoft/onnxruntime/releases/download/v1.24.3/onnxruntime-linux-x64-1.24.3.tgz
@@ -20,7 +20,7 @@
 // 	      -Wl,-rpath,$(ORT_LIB_DIR)
 
 #![cfg(feature = "ort")]
-use crate::embedders::{Embedder, Input, InputType, ModelInfo, EMBEDDERS};
+use crate::backends::{Backend, Input, InputType, ModelInfo, BACKENDS};
 use crate::utils::flatten_vectors;
 use anyhow::{bail, Result};
 use image::imageops::FilterType;
@@ -31,8 +31,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-pub static ORT_EMBEDDER_ID: i32 = 3;
-pub static ORT_EMBEDDER_NAME: &str = "ort";
+pub static ORT_BACKEND_ID: i32 = 3;
+pub static ORT_BACKEND_NAME: &str = "ort";
 
 const DEFAULT_MODEL_BASE_DIR: &str = "/path/to/onnx_models";
 
@@ -60,9 +60,9 @@ thread_local! {
     static ORT_SESSIONS: RefCell<HashMap<i32, Session>> = RefCell::new(HashMap::new());
 }
 
-struct OrtEmbedder;
+struct OrtBackend;
 
-impl OrtEmbedder {
+impl OrtBackend {
     fn lookup_model_registration(model_id: i32) -> Option<&'static ModelRegistration> {
         ORT_REGISTERED_MODELS
             .iter()
@@ -116,13 +116,13 @@ impl OrtEmbedder {
     }
 }
 
-impl Embedder for OrtEmbedder {
+impl Backend for OrtBackend {
     fn id(&self) -> i32 {
-        ORT_EMBEDDER_ID
+        ORT_BACKEND_ID
     }
 
     fn name(&self) -> &'static str {
-        ORT_EMBEDDER_NAME
+        ORT_BACKEND_NAME
     }
 
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
@@ -188,7 +188,7 @@ fn embed_images(
 
     let mut all_embeddings = Vec::new();
     for path in &image_paths {
-        all_embeddings.push(OrtEmbedder::embed_image(session, path, def)?);
+        all_embeddings.push(OrtBackend::embed_image(session, path, def)?);
     }
 
     flatten_vectors(all_embeddings)
@@ -221,15 +221,15 @@ fn embed_image_directories(
             .collect();
 
         for image_path in &image_paths {
-            all_embeddings.push(OrtEmbedder::embed_image(session, image_path, def)?);
+            all_embeddings.push(OrtBackend::embed_image(session, image_path, def)?);
         }
     }
 
     flatten_vectors(all_embeddings)
 }
 
-#[linkme::distributed_slice(EMBEDDERS)]
-static ORT: &dyn Embedder = &OrtEmbedder;
+#[linkme::distributed_slice(BACKENDS)]
+static ORT: &dyn Backend = &OrtBackend;
 
 #[distributed_slice(ORT_REGISTERED_MODELS)]
 static CLIP_VIT_BASE_PATCH32: ModelRegistration = ModelRegistration {

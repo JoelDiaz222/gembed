@@ -1,20 +1,20 @@
-mod embedders;
+mod backends;
 mod utils;
 
-use crate::embedders::{EmbedderRegistry, InputType};
+use crate::backends::{BackendRegistry, InputType};
 use crate::utils::{
     build_input, ffi_guard, EmbeddingBatch, InputData,
-    StringSlice, ERR_EMPTY_INPUT, ERR_INVALID_EMBEDDER, ERR_INVALID_POINTER, ERR_MODEL_NOT_ALLOWED, EXIT_SUCCESS, GENERIC_ERROR,
+    StringSlice, ERR_EMPTY_INPUT, ERR_INVALID_BACKEND, ERR_INVALID_POINTER, ERR_MODEL_NOT_ALLOWED, EXIT_SUCCESS, GENERIC_ERROR,
 };
 use anyhow::Result;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::slice;
 
-/// Validates embedder by name and returns its ID
+/// Validates backend by name and returns its ID
 /// Returns -1 if non-existent
 #[unsafe(no_mangle)]
-pub extern "C" fn validate_embedder(name: *const c_char) -> c_int {
+pub extern "C" fn validate_backend(name: *const c_char) -> c_int {
     ffi_guard(|| {
         if name.is_null() {
             return ERR_INVALID_POINTER;
@@ -31,15 +31,15 @@ pub extern "C" fn validate_embedder(name: *const c_char) -> c_int {
             return ERR_EMPTY_INPUT;
         }
 
-        EmbedderRegistry::lookup_embedder_id(name_str).unwrap_or(GENERIC_ERROR)
+        BackendRegistry::lookup_backend_id(name_str).unwrap_or(GENERIC_ERROR)
     })
 }
 
-/// Validates model string for given embedder and input type, returns model ID
+/// Validates model string for given backend and input type, returns model ID
 /// Returns -1 if non-existent or doesn't support the input type
 #[unsafe(no_mangle)]
-pub extern "C" fn validate_embedding_model(
-    embedder_id: c_int,
+pub extern "C" fn validate_model(
+    backend_id: c_int,
     model_name: *const c_char,
     input_type: InputType,
 ) -> c_int {
@@ -59,16 +59,16 @@ pub extern "C" fn validate_embedding_model(
             return ERR_EMPTY_INPUT;
         }
 
-        EmbedderRegistry::validate_model_and_input_type(embedder_id, model_str, input_type)
+        BackendRegistry::validate_model_and_input_type(backend_id, model_str, input_type)
             .unwrap_or(GENERIC_ERROR)
     })
 }
 
-/// Embeds the input_data using the embedder and model specified by ID,
+/// Embeds the input_data using the backend and model specified by ID,
 /// and stores the result in out_batch
 #[unsafe(no_mangle)]
 pub extern "C" fn generate_embeddings(
-    embedder_id: c_int,
+    backend_id: c_int,
     model_id: c_int,
     input_data: *const InputData,
     out_batch: *mut EmbeddingBatch,
@@ -80,12 +80,12 @@ pub extern "C" fn generate_embeddings(
 
         let input_data = unsafe { &*input_data };
 
-        let embedder = match EmbedderRegistry::lookup_embedder(embedder_id) {
+        let backend = match BackendRegistry::lookup_backend(backend_id) {
             Some(e) => e,
-            None => return ERR_INVALID_EMBEDDER,
+            None => return ERR_INVALID_BACKEND,
         };
 
-        if !embedder.supports_input_for_model(model_id, input_data.input_type) {
+        if !backend.supports_input_for_model(model_id, input_data.input_type) {
             return ERR_MODEL_NOT_ALLOWED;
         }
 
@@ -94,7 +94,7 @@ pub extern "C" fn generate_embeddings(
             Err(value) => return value,
         };
 
-        let result = embedder.embed(model_id, input);
+        let result = backend.embed(model_id, input);
 
         let (mut flat, n_vectors, dim) = match result {
             Ok((flat, n_vectors, dim)) if n_vectors > 0 && !flat.is_empty() => {

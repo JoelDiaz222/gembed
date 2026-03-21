@@ -1,5 +1,5 @@
 #![cfg(feature = "http")]
-use crate::embedders::{Embedder, Input, InputType, ModelInfo, EMBEDDERS};
+use crate::backends::{Backend, Input, InputType, ModelInfo, BACKENDS};
 use crate::utils::flatten_vectors;
 use anyhow::{anyhow, bail, Result};
 use linkme::distributed_slice;
@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use std::time::Duration;
 
-pub static HTTP_EMBEDDER_ID: i32 = 3;
-pub static HTTP_EMBEDDER_NAME: &str = "http";
+pub static HTTP_BACKEND_ID: i32 = 3;
+pub static HTTP_BACKEND_NAME: &str = "http";
 
 #[distributed_slice]
 pub static HTTP_REGISTERED_MODELS: [ModelInfo] = [..];
@@ -23,7 +23,7 @@ static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
 });
 
 static BASE_URL: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("HTTP_EMBEDDER_ENDPOINT")
+    std::env::var("HTTP_BACKEND_ENDPOINT")
         .unwrap_or_else(|_| "http://127.0.0.1:8080/v1/embed".to_string())
 });
 
@@ -43,21 +43,21 @@ struct EmbeddingResponse {
     data: Vec<EmbeddingData>,
 }
 
-struct HttpEmbedder;
+struct HttpBackend;
 
-impl HttpEmbedder {
+impl HttpBackend {
     fn lookup_model_registration(model_id: i32) -> Option<&'static ModelInfo> {
         HTTP_REGISTERED_MODELS.iter().find(|m| m.id() == model_id)
     }
 }
 
-impl Embedder for HttpEmbedder {
+impl Backend for HttpBackend {
     fn id(&self) -> i32 {
-        HTTP_EMBEDDER_ID
+        HTTP_BACKEND_ID
     }
 
     fn name(&self) -> &'static str {
-        HTTP_EMBEDDER_NAME
+        HTTP_BACKEND_NAME
     }
 
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
@@ -66,7 +66,7 @@ impl Embedder for HttpEmbedder {
 
         match input {
             Input::Texts(texts) => embed_texts(texts, model_info),
-            _ => bail!("HTTP embedder only supports text input"),
+            _ => bail!("HTTP backend only supports text input"),
         }
     }
 
@@ -101,8 +101,8 @@ fn embed_texts(texts: Vec<&str>, model_info: &ModelInfo) -> Result<(Vec<f32>, us
     flatten_vectors(vectors)
 }
 
-#[linkme::distributed_slice(EMBEDDERS)]
-static HTTP: &dyn Embedder = &HttpEmbedder;
+#[linkme::distributed_slice(BACKENDS)]
+static HTTP: &dyn Backend = &HttpBackend;
 
 #[distributed_slice(HTTP_REGISTERED_MODELS)]
 static ALL_MINI_LM_L6_V2: ModelInfo = ModelInfo::new(

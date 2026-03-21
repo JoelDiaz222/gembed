@@ -1,12 +1,12 @@
 #![cfg(feature = "fastembed")]
-use crate::embedders::{Embedder, Input, InputType, ModelInfo, EMBEDDERS};
+use crate::backends::{Backend, Input, InputType, ModelInfo, BACKENDS};
 use anyhow::{bail, Result};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use linkme::distributed_slice;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 
-pub static FASTEMBED_EMBEDDER_ID: i32 = 0;
-pub static FASTEMBED_EMBEDDER_NAME: &str = "fastembed";
+pub static FASTEMBED_BACKEND_ID: i32 = 0;
+pub static FASTEMBED_BACKEND_NAME: &str = "fastembed";
 
 struct ModelRegistration {
     pub info: ModelInfo,
@@ -20,9 +20,9 @@ thread_local! {
     static FASTEMBED_MODELS: RefCell<HashMap<i32, TextEmbedding>> = RefCell::new(HashMap::new());
 }
 
-struct FastEmbedder;
+struct FastBackend;
 
-impl FastEmbedder {
+impl FastBackend {
     fn lookup_model_registration(model_id: i32) -> Option<&'static ModelRegistration> {
         FASTEMBED_REGISTERED_MODELS
             .iter()
@@ -30,13 +30,13 @@ impl FastEmbedder {
     }
 }
 
-impl Embedder for FastEmbedder {
+impl Backend for FastBackend {
     fn id(&self) -> i32 {
-        FASTEMBED_EMBEDDER_ID
+        FASTEMBED_BACKEND_ID
     }
 
     fn name(&self) -> &'static str {
-        FASTEMBED_EMBEDDER_NAME
+        FASTEMBED_BACKEND_NAME
     }
 
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
@@ -75,8 +75,8 @@ impl Embedder for FastEmbedder {
     }
 }
 
-#[linkme::distributed_slice(EMBEDDERS)]
-static FASTEMBED: &dyn Embedder = &FastEmbedder;
+#[linkme::distributed_slice(BACKENDS)]
+static FASTEMBED: &dyn Backend = &FastBackend;
 
 #[distributed_slice(FASTEMBED_REGISTERED_MODELS)]
 static ALL_MINI_LM_L6_V2: ModelRegistration = ModelRegistration {

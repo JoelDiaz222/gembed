@@ -1,9 +1,9 @@
 #![cfg(feature = "embed_anything")]
-use crate::embedders::{Embedder, Input, InputType, ModelInfo, EMBEDDERS};
+use crate::backends::{Backend, Input, InputType, ModelInfo, BACKENDS};
 use crate::utils::{detect_image_format, flatten_vectors};
 use anyhow::{anyhow, bail, Result};
 use embed_anything::embed_image_directory;
-use embed_anything::embeddings::embed::{Embedder as EAEmbedder, EmbedderBuilder};
+use embed_anything::embeddings::embed::{Embedder as EABackend, EmbedderBuilder};
 use embed_anything::embeddings::local::text_embedding::ONNXModel;
 use linkme::distributed_slice;
 use std::cell::RefCell;
@@ -13,8 +13,8 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
-pub static EMBED_ANYTHING_EMBEDDER_ID: i32 = 2;
-pub static EMBED_ANYTHING_EMBEDDER_NAME: &str = "embed_anything";
+pub static EMBED_ANYTHING_BACKEND_ID: i32 = 2;
+pub static EMBED_ANYTHING_BACKEND_NAME: &str = "embed_anything";
 
 struct ModelDef {
     architecture: &'static str,
@@ -32,12 +32,12 @@ pub static EMBED_ANYTHING_REGISTERED_MODELS: [ModelRegistration] = [..];
 
 thread_local! {
     static RUNTIME: RefCell<Option<Runtime>> = RefCell::new(None);
-    static EMBED_ANYTHING_MODELS: RefCell<HashMap<i32, Arc<EAEmbedder>>> = RefCell::new(HashMap::new());
+    static EMBED_ANYTHING_MODELS: RefCell<HashMap<i32, Arc<EABackend>>> = RefCell::new(HashMap::new());
 }
 
-struct EmbedAnythingEmbedder;
+struct EmbedAnythingBackend;
 
-impl EmbedAnythingEmbedder {
+impl EmbedAnythingBackend {
     fn lookup_model_registration(model_id: i32) -> Option<&'static ModelRegistration> {
         EMBED_ANYTHING_REGISTERED_MODELS
             .iter()
@@ -57,7 +57,7 @@ impl EmbedAnythingEmbedder {
         })
     }
 
-    fn embedder(model_id: i32) -> Result<Arc<EAEmbedder>> {
+    fn backend(model_id: i32) -> Result<Arc<EABackend>> {
         let registration = Self::lookup_model_registration(model_id)
             .ok_or_else(|| anyhow!("Invalid model ID: {}", model_id))?;
 
@@ -65,13 +65,13 @@ impl EmbedAnythingEmbedder {
 
         EMBED_ANYTHING_MODELS.with(|cell| {
             let mut models = cell.borrow_mut();
-            if let Some(embedder) = models.get(&model_id) {
-                return Ok(Arc::clone(embedder));
+            if let Some(backend) = models.get(&model_id) {
+                return Ok(Arc::clone(backend));
             }
 
             let builder = EmbedderBuilder::new().model_architecture(model_def.architecture);
 
-            let embedder = if let Some(onnx_model) = model_def.onnx_model {
+            let backend = if let Some(onnx_model) = model_def.onnx_model {
                 builder
                     .onnx_model_id(Some(onnx_model))
                     .from_pretrained_onnx()?
@@ -81,33 +81,33 @@ impl EmbedAnythingEmbedder {
                 bail!("No model configuration found");
             };
 
-            let arc_embedder = Arc::new(embedder);
-            models.insert(model_id, Arc::clone(&arc_embedder));
-            Ok(arc_embedder)
+            let arc_backend = Arc::new(backend);
+            models.insert(model_id, Arc::clone(&arc_backend));
+            Ok(arc_backend)
         })
     }
 }
 
-impl Embedder for EmbedAnythingEmbedder {
+impl Backend for EmbedAnythingBackend {
     fn id(&self) -> i32 {
-        EMBED_ANYTHING_EMBEDDER_ID
+        EMBED_ANYTHING_BACKEND_ID
     }
 
     fn name(&self) -> &'static str {
-        EMBED_ANYTHING_EMBEDDER_NAME
+        EMBED_ANYTHING_BACKEND_NAME
     }
 
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
-        let embedder = Self::embedder(model_id)?;
+        let backend = Self::backend(model_id)?;
         let runtime = Self::runtime()?;
 
         match input {
-            Input::Texts(texts) => embed_texts(texts, &embedder, runtime),
-            Input::Images(images) => embed_images(images, &embedder, runtime),
+            Input::Texts(texts) => embed_texts(texts, &backend, runtime),
+            Input::Images(images) => embed_images(images, &backend, runtime),
             Input::Multimodal { images, texts } => {
-                embed_multimodal(images, texts, &embedder, runtime)
+                embed_multimodal(images, texts, &backend, runtime)
             }
-            Input::ImageDirectories(paths) => embed_image_directories(paths, &embedder, runtime),
+            Input::ImageDirectories(paths) => embed_image_directories(paths, &backend, runtime),
         }
     }
 
@@ -127,7 +127,7 @@ impl Embedder for EmbedAnythingEmbedder {
 
 fn embed_image_directories(
     paths: Vec<&str>,
-    embedder: &Arc<EAEmbedder>,
+    backend: &Arc<EABackend>,
     runtime: &Runtime,
 ) -> Result<(Vec<f32>, usize, usize)> {
     let mut all_embeddings = Vec::new();
@@ -136,7 +136,7 @@ fn embed_image_directories(
         let result = runtime
             .block_on(embed_image_directory(
                 std::path::PathBuf::from(path),
-                embedder,
+                backend,
                 None,
                 None,
             ))?
@@ -152,10 +152,10 @@ fn embed_image_directories(
 
 fn embed_texts(
     texts: Vec<&str>,
-    embedder: &Arc<EAEmbedder>,
+    backend: &Arc<EABackend>,
     runtime: &Runtime,
 ) -> Result<(Vec<f32>, usize, usize)> {
-    let result = runtime.block_on(embedder.embed(&texts, None, None))?;
+    let result = runtime.block_on(backend.embed(&texts, None, None))?;
 
     let vectors: Vec<Vec<f32>> = result
         .into_iter()
@@ -167,7 +167,7 @@ fn embed_texts(
 
 fn embed_images(
     images: Vec<&[u8]>,
-    embedder: &Arc<EAEmbedder>,
+    backend: &Arc<EABackend>,
     runtime: &Runtime,
 ) -> Result<(Vec<f32>, usize, usize)> {
     if images.is_empty() {
@@ -186,7 +186,7 @@ fn embed_images(
     let result = runtime
         .block_on(embed_image_directory(
             tmp_path.to_path_buf(),
-            embedder,
+            backend,
             None,
             None,
         ))?
@@ -219,20 +219,20 @@ fn embed_images(
 fn embed_multimodal(
     images: Vec<&[u8]>,
     texts: Vec<&str>,
-    embedder: &Arc<EAEmbedder>,
+    backend: &Arc<EABackend>,
     runtime: &Runtime,
 ) -> Result<(Vec<f32>, usize, usize)> {
     let mut all_embeddings = Vec::new();
 
     if !images.is_empty() {
-        let (img_embeddings, n_img, dim) = embed_images(images, embedder, runtime)?;
+        let (img_embeddings, n_img, dim) = embed_images(images, backend, runtime)?;
         for i in 0..n_img {
             all_embeddings.push(img_embeddings[i * dim..(i + 1) * dim].to_vec());
         }
     }
 
     if !texts.is_empty() {
-        let (text_embeddings, n_texts, dim) = embed_texts(texts, embedder, runtime)?;
+        let (text_embeddings, n_texts, dim) = embed_texts(texts, backend, runtime)?;
         for i in 0..n_texts {
             all_embeddings.push(text_embeddings[i * dim..(i + 1) * dim].to_vec());
         }
@@ -241,8 +241,8 @@ fn embed_multimodal(
     flatten_vectors(all_embeddings)
 }
 
-#[linkme::distributed_slice(EMBEDDERS)]
-static EMBED_ANYTHING: &dyn Embedder = &EmbedAnythingEmbedder;
+#[linkme::distributed_slice(BACKENDS)]
+static EMBED_ANYTHING: &dyn Backend = &EmbedAnythingBackend;
 
 #[distributed_slice(EMBED_ANYTHING_REGISTERED_MODELS)]
 static ALL_MINI_LM_L6_V2: ModelRegistration = ModelRegistration {

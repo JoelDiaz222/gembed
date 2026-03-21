@@ -54,7 +54,7 @@ impl ModelInfo {
     }
 }
 
-pub trait Embedder: Send + Sync {
+pub trait Backend: Send + Sync {
     fn id(&self) -> i32;
     fn name(&self) -> &'static str;
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)>;
@@ -63,26 +63,26 @@ pub trait Embedder: Send + Sync {
 }
 
 #[distributed_slice]
-pub static EMBEDDERS: [&'static dyn Embedder] = [..];
+pub static BACKENDS: [&'static dyn Backend] = [..];
 
-pub struct EmbedderRegistry;
+pub struct BackendRegistry;
 
-impl EmbedderRegistry {
-    pub fn lookup_embedder(id: i32) -> Option<&'static dyn Embedder> {
-        EMBEDDERS.iter().find(|e| e.id() == id).copied()
+impl BackendRegistry {
+    pub fn lookup_backend(id: i32) -> Option<&'static dyn Backend> {
+        BACKENDS.iter().find(|e| e.id() == id).copied()
     }
 
-    pub fn lookup_embedder_id(name: &str) -> Option<i32> {
-        EMBEDDERS.iter().find(|e| e.name() == name).map(|e| e.id())
+    pub fn lookup_backend_id(name: &str) -> Option<i32> {
+        BACKENDS.iter().find(|e| e.name() == name).map(|e| e.id())
     }
 
     pub fn validate_model_and_input_type(
-        embedder_id: i32,
+        backend_id: i32,
         model_name: &str,
         input_type: InputType,
     ) -> Option<i32> {
-        let embedder = Self::lookup_embedder(embedder_id)?;
-        let model_info = embedder.model_info(model_name)?;
+        let backend = Self::lookup_backend(backend_id)?;
+        let model_info = backend.model_info(model_name)?;
         model_info
             .supports_input_type(input_type)
             .then_some(model_info.id())
