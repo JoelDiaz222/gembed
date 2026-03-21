@@ -31,11 +31,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-pub static ORT_BACKEND_ID: i32 = 3;
+pub static ORT_BACKEND_ID: i32 = 4;
 pub static ORT_BACKEND_NAME: &str = "ort";
 
 const DEFAULT_MODEL_BASE_DIR: &str = "/path/to/onnx_models";
 
+#[derive(Clone)]
 enum Normalization {
     /// CLIP: pixel / 255 * 2 - 1  →  [-1, 1]
     Affine,
@@ -43,6 +44,7 @@ enum Normalization {
     MeanStd { mean: [f32; 3], std: [f32; 3] },
 }
 
+#[derive(Clone)]
 struct ModelDef {
     image_size: usize,
     normalization: Normalization,
@@ -63,6 +65,7 @@ thread_local! {
 struct OrtBackend;
 
 impl OrtBackend {
+    #[cfg(not(feature = "dynamic_model_loading"))]
     fn lookup_model_registration(model_id: i32) -> Option<&'static ModelRegistration> {
         ORT_REGISTERED_MODELS
             .iter()
@@ -125,29 +128,61 @@ impl Backend for OrtBackend {
         ORT_BACKEND_NAME
     }
 
+    #[cfg(not(feature = "dynamic_model_loading"))]
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
-        let registration = Self::lookup_model_registration(model_id)
-            .ok_or_else(|| anyhow::anyhow!("Invalid model ID: {}", model_id))?;
+        let model_name = self.resolve_model_name(model_id)?;
+
+        let registration = ORT_REGISTERED_MODELS
+            .iter()
+            .find(|reg| reg.info.name() == model_name)
+            .ok_or_else(|| anyhow::anyhow!("Invalid model: {}", model_name))?;
 
         ORT_SESSIONS.with(|cell| {
             let mut sessions = cell.borrow_mut();
             if !sessions.contains_key(&model_id) {
-                let path = Self::model_path(registration.info.name());
+                let path = Self::model_path(&model_name);
                 let session = Session::builder()?.commit_from_file(&path)?;
                 sessions.insert(model_id, session);
             }
 
             let session = sessions.get_mut(&model_id).unwrap();
-            let def = &registration.def;
+            let def = registration.def.clone();
 
             match input {
-                Input::Images(images) => embed_images(session, images, def),
-                Input::ImageDirectories(paths) => embed_image_directories(session, paths, def),
+                Input::Images(images) => embed_images(session, images, &def),
+                Input::ImageDirectories(paths) => embed_image_directories(session, paths, &def),
                 _ => bail!("Input type not supported"),
             }
         })
     }
 
+    #[cfg(feature = "dynamic_model_loading")]
+    fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
+        let model_name = self.resolve_model_name(model_id)?;
+
+        ORT_SESSIONS.with(|cell| {
+            let mut sessions = cell.borrow_mut();
+            if !sessions.contains_key(&model_id) {
+                let path = Self::model_path(&model_name);
+                let session = Session::builder()?.commit_from_file(&path)?;
+                sessions.insert(model_id, session);
+            }
+
+            let session = sessions.get_mut(&model_id).unwrap();
+            let def = ModelDef {
+                image_size: 224,
+                normalization: Normalization::Affine,
+            };
+
+            match input {
+                Input::Images(images) => embed_images(session, images, &def),
+                Input::ImageDirectories(paths) => embed_image_directories(session, paths, &def),
+                _ => bail!("Input type not supported"),
+            }
+        })
+    }
+
+    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
         ORT_REGISTERED_MODELS
             .iter()
@@ -155,10 +190,9 @@ impl Backend for OrtBackend {
             .map(|m| &m.info)
     }
 
-    fn supports_input_for_model(&self, model_id: i32, input_type: InputType) -> bool {
-        Self::lookup_model_registration(model_id)
-            .map(|m| m.info.supports_input_type(input_type))
-            .unwrap_or(false)
+    #[cfg(not(feature = "dynamic_model_loading"))]
+    fn model_info_by_id(&self, model_id: i32) -> Option<&ModelInfo> {
+        Self::lookup_model_registration(model_id).map(|reg| &reg.info)
     }
 }
 

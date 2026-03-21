@@ -4,7 +4,7 @@ use crate::backends::grpc::tei::v1::EmbedBatchRequest;
 use crate::backends::grpc::tei::v1::EmbedMultimodalRequest;
 use crate::backends::{Backend, Input, InputType, ModelInfo, BACKENDS};
 use crate::utils::flatten_vectors;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use linkme::distributed_slice;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -44,16 +44,12 @@ static ENDPOINT: LazyLock<Endpoint> = LazyLock::new(|| {
 });
 
 thread_local! {
-    static CLIENT: std::cell::RefCell<Option<EmbedClient<Channel>>> = std::cell::RefCell::new(None);
+    static CLIENT: std::cell::RefCell<Option<EmbedClient<Channel>>> = const { std::cell::RefCell::new(None) };
 }
 
 struct GrpcBackend;
 
 impl GrpcBackend {
-    fn lookup_model_registration(model_id: i32) -> Option<&'static ModelInfo> {
-        GRPC_REGISTERED_MODELS.iter().find(|m| m.id() == model_id)
-    }
-
     fn grpc_client() -> Result<EmbedClient<Channel>> {
         CLIENT.with(|cell| {
             let mut client_opt = cell.borrow_mut();
@@ -80,31 +76,30 @@ impl Backend for GrpcBackend {
     }
 
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
-        let model_info = Self::lookup_model_registration(model_id)
-            .ok_or_else(|| anyhow!("Unknown model ID: {}", model_id))?;
+        let model_name = self.resolve_model_name(model_id)?;
 
         match input {
-            Input::Texts(texts) => embed_texts(texts, model_info),
-            Input::Images(images) => embed_images(images, model_info),
-            Input::Multimodal { images, texts } => embed_multimodal(images, texts, model_info),
+            Input::Texts(texts) => embed_texts(texts, &model_name),
+            Input::Images(images) => embed_images(images, &model_name),
+            Input::Multimodal { images, texts } => embed_multimodal(images, texts, &model_name),
             _ => bail!("Unsupported input type"),
         }
     }
 
+    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
         GRPC_REGISTERED_MODELS
             .iter()
             .find(|m| m.name() == model_name)
     }
 
-    fn supports_input_for_model(&self, model_id: i32, input_type: InputType) -> bool {
-        Self::lookup_model_registration(model_id)
-            .map(|m| m.supports_input_type(input_type))
-            .unwrap_or(false)
+    #[cfg(not(feature = "dynamic_model_loading"))]
+    fn model_info_by_id(&self, model_id: i32) -> Option<&ModelInfo> {
+        GRPC_REGISTERED_MODELS.iter().find(|m| m.id() == model_id)
     }
 }
 
-fn embed_texts(texts: Vec<&str>, model_info: &ModelInfo) -> Result<(Vec<f32>, usize, usize)> {
+fn embed_texts(texts: Vec<&str>, model_name: &str) -> Result<(Vec<f32>, usize, usize)> {
     let mut client = GrpcBackend::grpc_client()?;
 
     let response = RUNTIME.block_on(async {
@@ -115,7 +110,7 @@ fn embed_texts(texts: Vec<&str>, model_info: &ModelInfo) -> Result<(Vec<f32>, us
             truncation_direction: 0,
             prompt_name: None,
             dimensions: None,
-            model: model_info.name().to_string(),
+            model: model_name.to_string(),
         };
         client.embed_batch(tonic::Request::new(request)).await
     })?;
@@ -130,12 +125,12 @@ fn embed_texts(texts: Vec<&str>, model_info: &ModelInfo) -> Result<(Vec<f32>, us
     flatten_vectors(embeddings)
 }
 
-fn embed_images(images: Vec<&[u8]>, model_info: &ModelInfo) -> Result<(Vec<f32>, usize, usize)> {
+fn embed_images(images: Vec<&[u8]>, model_name: &str) -> Result<(Vec<f32>, usize, usize)> {
     let mut client = GrpcBackend::grpc_client()?;
 
     let response = RUNTIME.block_on(async {
         let request = EmbedMultimodalRequest {
-            model: Some(model_info.name().to_string()),
+            model: Some(model_name.to_string()),
             images: images.iter().map(|&img| img.to_vec()).collect(),
             text_inputs: vec![],
         };
@@ -155,13 +150,13 @@ fn embed_images(images: Vec<&[u8]>, model_info: &ModelInfo) -> Result<(Vec<f32>,
 fn embed_multimodal(
     images: Vec<&[u8]>,
     texts: Vec<&str>,
-    model_info: &ModelInfo,
+    model_name: &str,
 ) -> Result<(Vec<f32>, usize, usize)> {
     let mut client = GrpcBackend::grpc_client()?;
 
     let response = RUNTIME.block_on(async {
         let request = EmbedMultimodalRequest {
-            model: Some(model_info.name().to_string()),
+            model: Some(model_name.to_string()),
             images: images.iter().map(|&b| b.to_vec()).collect(),
             text_inputs: texts.iter().map(|&s| s.to_string()).collect(),
         };

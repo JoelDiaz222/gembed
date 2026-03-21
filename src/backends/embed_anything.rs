@@ -31,13 +31,14 @@ struct ModelRegistration {
 pub static EMBED_ANYTHING_REGISTERED_MODELS: [ModelRegistration] = [..];
 
 thread_local! {
-    static RUNTIME: RefCell<Option<Runtime>> = RefCell::new(None);
+    static RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) };
     static EMBED_ANYTHING_MODELS: RefCell<HashMap<i32, Arc<EABackend>>> = RefCell::new(HashMap::new());
 }
 
 struct EmbedAnythingBackend;
 
 impl EmbedAnythingBackend {
+    #[cfg(not(feature = "dynamic_model_loading"))]
     fn lookup_model_registration(model_id: i32) -> Option<&'static ModelRegistration> {
         EMBED_ANYTHING_REGISTERED_MODELS
             .iter()
@@ -57,11 +58,12 @@ impl EmbedAnythingBackend {
         })
     }
 
-    fn backend(model_id: i32) -> Result<Arc<EABackend>> {
-        let registration = Self::lookup_model_registration(model_id)
-            .ok_or_else(|| anyhow!("Invalid model ID: {}", model_id))?;
-
-        let model_def = &registration.def;
+    #[cfg(not(feature = "dynamic_model_loading"))]
+    fn backend(model_id: i32, model_name: String) -> Result<Arc<EABackend>> {
+        let registration = EMBED_ANYTHING_REGISTERED_MODELS
+            .iter()
+            .find(|reg| reg.info.name() == model_name)
+            .ok_or_else(|| anyhow::anyhow!("Invalid model: {}", model_name))?;
 
         EMBED_ANYTHING_MODELS.with(|cell| {
             let mut models = cell.borrow_mut();
@@ -69,6 +71,7 @@ impl EmbedAnythingBackend {
                 return Ok(Arc::clone(backend));
             }
 
+            let model_def = &registration.def;
             let builder = EmbedderBuilder::new().model_architecture(model_def.architecture);
 
             let backend = if let Some(onnx_model) = model_def.onnx_model {
@@ -80,6 +83,25 @@ impl EmbedAnythingBackend {
             } else {
                 bail!("No model configuration found");
             };
+
+            let arc_backend = Arc::new(backend);
+            models.insert(model_id, Arc::clone(&arc_backend));
+            Ok(arc_backend)
+        })
+    }
+
+    #[cfg(feature = "dynamic_model_loading")]
+    fn backend(model_id: i32, model_name: String) -> Result<Arc<EABackend>> {
+        EMBED_ANYTHING_MODELS.with(|cell| {
+            let mut models = cell.borrow_mut();
+            if let Some(backend) = models.get(&model_id) {
+                return Ok(Arc::clone(backend));
+            }
+
+            let backend = EmbedderBuilder::new()
+                .model_architecture("bert")
+                .model_id(Some(&model_name))
+                .from_pretrained_hf()?;
 
             let arc_backend = Arc::new(backend);
             models.insert(model_id, Arc::clone(&arc_backend));
@@ -98,7 +120,7 @@ impl Backend for EmbedAnythingBackend {
     }
 
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
-        let backend = Self::backend(model_id)?;
+        let backend = Self::backend(model_id, self.resolve_model_name(model_id)?)?;
         let runtime = Self::runtime()?;
 
         match input {
@@ -111,6 +133,7 @@ impl Backend for EmbedAnythingBackend {
         }
     }
 
+    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
         EMBED_ANYTHING_REGISTERED_MODELS
             .iter()
@@ -118,10 +141,9 @@ impl Backend for EmbedAnythingBackend {
             .map(|reg| &reg.info)
     }
 
-    fn supports_input_for_model(&self, model_id: i32, input_type: InputType) -> bool {
-        Self::lookup_model_registration(model_id)
-            .map(|reg| reg.info.supports_input_type(input_type))
-            .unwrap_or(false)
+    #[cfg(not(feature = "dynamic_model_loading"))]
+    fn model_info_by_id(&self, model_id: i32) -> Option<&ModelInfo> {
+        Self::lookup_model_registration(model_id).map(|reg| &reg.info)
     }
 }
 

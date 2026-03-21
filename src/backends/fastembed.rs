@@ -1,5 +1,6 @@
 #![cfg(feature = "fastembed")]
 use crate::backends::{Backend, Input, InputType, ModelInfo, BACKENDS};
+use crate::utils::flatten_vectors;
 use anyhow::{bail, Result};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use linkme::distributed_slice;
@@ -20,9 +21,10 @@ thread_local! {
     static FASTEMBED_MODELS: RefCell<HashMap<i32, TextEmbedding>> = RefCell::new(HashMap::new());
 }
 
-struct FastBackend;
+struct FastEmbedBackend;
 
-impl FastBackend {
+impl FastEmbedBackend {
+    #[cfg(not(feature = "dynamic_model_loading"))]
     fn lookup_model_registration(model_id: i32) -> Option<&'static ModelRegistration> {
         FASTEMBED_REGISTERED_MODELS
             .iter()
@@ -30,7 +32,7 @@ impl FastBackend {
     }
 }
 
-impl Backend for FastBackend {
+impl Backend for FastEmbedBackend {
     fn id(&self) -> i32 {
         FASTEMBED_BACKEND_ID
     }
@@ -39,14 +41,18 @@ impl Backend for FastBackend {
         FASTEMBED_BACKEND_NAME
     }
 
+    #[cfg(not(feature = "dynamic_model_loading"))]
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
         let text_slices = match input {
             Input::Texts(texts) => texts,
             _ => bail!("Unsupported input type"),
         };
 
-        let registration = Self::lookup_model_registration(model_id)
-            .ok_or_else(|| anyhow::anyhow!("Invalid model ID: {}", model_id))?;
+        let model_name = self.resolve_model_name(model_id)?;
+        let registration = FASTEMBED_REGISTERED_MODELS
+            .iter()
+            .find(|reg| reg.info.name() == model_name)
+            .ok_or_else(|| anyhow::anyhow!("Invalid model: {}", model_name))?;
 
         FASTEMBED_MODELS.with(|cell| {
             let mut models = cell.borrow_mut();
@@ -57,10 +63,38 @@ impl Backend for FastBackend {
                 )
                 .expect("Failed to initialize model")
             });
-            model_instance.embed_flat(text_slices, None)
+            let embeddings = model_instance.embed(text_slices, None)?;
+            flatten_vectors(embeddings)
         })
     }
 
+    #[cfg(feature = "dynamic_model_loading")]
+    fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
+        let text_slices = match input {
+            Input::Texts(texts) => texts,
+            _ => bail!("Unsupported input type"),
+        };
+
+        let model_name = self.resolve_model_name(model_id)?;
+        let model_enum = model_name
+            .parse::<EmbeddingModel>()
+            .map_err(|_| anyhow::anyhow!("Failed to parse model name: {}", model_name))?;
+
+        FASTEMBED_MODELS.with(|cell| {
+            let mut models = cell.borrow_mut();
+            let model_instance = models.entry(model_id).or_insert_with(|| {
+                TextEmbedding::try_new(
+                    InitOptions::new(model_enum)
+                        .with_cache_dir(PathBuf::from("./fastembed_models")),
+                )
+                .expect("Failed to initialize model")
+            });
+            let embeddings = model_instance.embed(text_slices, None)?;
+            crate::utils::flatten_vectors(embeddings)
+        })
+    }
+
+    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
         FASTEMBED_REGISTERED_MODELS
             .iter()
@@ -68,15 +102,18 @@ impl Backend for FastBackend {
             .map(|reg| &reg.info)
     }
 
+    #[cfg(not(feature = "dynamic_model_loading"))]
+    fn model_info_by_id(&self, model_id: i32) -> Option<&ModelInfo> {
+        Self::lookup_model_registration(model_id).map(|reg| &reg.info)
+    }
+
     fn supports_input_for_model(&self, model_id: i32, input_type: InputType) -> bool {
-        Self::lookup_model_registration(model_id)
-            .map(|reg| reg.info.supports_input_type(input_type))
-            .unwrap_or(false)
+        input_type == InputType::Text && self.resolve_model_name(model_id).is_ok()
     }
 }
 
 #[linkme::distributed_slice(BACKENDS)]
-static FASTEMBED: &dyn Backend = &FastBackend;
+static FASTEMBED: &dyn Backend = &FastEmbedBackend;
 
 #[distributed_slice(FASTEMBED_REGISTERED_MODELS)]
 static ALL_MINI_LM_L6_V2: ModelRegistration = ModelRegistration {

@@ -1,7 +1,7 @@
 #![cfg(feature = "http")]
 use crate::backends::{Backend, Input, InputType, ModelInfo, BACKENDS};
 use crate::utils::flatten_vectors;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use linkme::distributed_slice;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -45,11 +45,7 @@ struct EmbeddingResponse {
 
 struct HttpBackend;
 
-impl HttpBackend {
-    fn lookup_model_registration(model_id: i32) -> Option<&'static ModelInfo> {
-        HTTP_REGISTERED_MODELS.iter().find(|m| m.id() == model_id)
-    }
-}
+impl HttpBackend {}
 
 impl Backend for HttpBackend {
     fn id(&self) -> i32 {
@@ -61,31 +57,34 @@ impl Backend for HttpBackend {
     }
 
     fn embed(&self, model_id: i32, input: Input) -> Result<(Vec<f32>, usize, usize)> {
-        let model_info = Self::lookup_model_registration(model_id)
-            .ok_or_else(|| anyhow!("Unknown model ID: {}", model_id))?;
+        let model_name = self.resolve_model_name(model_id)?;
 
         match input {
-            Input::Texts(texts) => embed_texts(texts, model_info),
+            Input::Texts(texts) => embed_texts(texts, &model_name),
             _ => bail!("HTTP backend only supports text input"),
         }
     }
 
+    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
         HTTP_REGISTERED_MODELS
             .iter()
             .find(|m| m.name() == model_name)
     }
 
+    #[cfg(not(feature = "dynamic_model_loading"))]
+    fn model_info_by_id(&self, model_id: i32) -> Option<&ModelInfo> {
+        HTTP_REGISTERED_MODELS.iter().find(|m| m.id() == model_id)
+    }
+
     fn supports_input_for_model(&self, model_id: i32, input_type: InputType) -> bool {
-        Self::lookup_model_registration(model_id)
-            .map(|m| m.supports_input_type(input_type))
-            .unwrap_or(false)
+        input_type == InputType::Text && self.resolve_model_name(model_id).is_ok()
     }
 }
 
-fn embed_texts(texts: Vec<&str>, model_info: &ModelInfo) -> Result<(Vec<f32>, usize, usize)> {
+fn embed_texts(texts: Vec<&str>, model_name: &str) -> Result<(Vec<f32>, usize, usize)> {
     let request_body = EmbeddingRequest {
-        model: model_info.name(),
+        model: model_name,
         input: texts,
     };
 

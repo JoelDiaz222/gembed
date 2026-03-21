@@ -45,7 +45,7 @@ pub fn ffi_guard<F>(f: F) -> c_int
 where
     F: FnOnce() -> c_int,
 {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| GENERIC_ERROR)
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or(GENERIC_ERROR)
 }
 
 /// Build the input based on input_type

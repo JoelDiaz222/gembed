@@ -3,8 +3,8 @@ mod utils;
 
 use crate::backends::{BackendRegistry, InputType};
 use crate::utils::{
-    build_input, ffi_guard, EmbeddingBatch, InputData,
-    StringSlice, ERR_EMPTY_INPUT, ERR_INVALID_BACKEND, ERR_INVALID_POINTER, ERR_MODEL_NOT_ALLOWED, EXIT_SUCCESS, GENERIC_ERROR,
+    build_input, ffi_guard, EmbeddingBatch, InputData, StringSlice,
+    ERR_EMPTY_INPUT, ERR_INVALID_BACKEND, ERR_INVALID_POINTER, ERR_MODEL_NOT_ALLOWED, EXIT_SUCCESS, GENERIC_ERROR,
 };
 use anyhow::Result;
 use std::ffi::CStr;
