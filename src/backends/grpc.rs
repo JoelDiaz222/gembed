@@ -86,14 +86,12 @@ impl Backend for GrpcBackend {
         }
     }
 
-    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
         GRPC_REGISTERED_MODELS
             .iter()
             .find(|m| m.name() == model_name)
     }
 
-    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info_by_id(&self, model_id: i32) -> Option<&ModelInfo> {
         GRPC_REGISTERED_MODELS.iter().find(|m| m.id() == model_id)
     }
@@ -193,3 +191,107 @@ static CLIP_VIT_BASE_PATCH32: ModelInfo = ModelInfo::new(
     "ViT-B-32",
     &[InputType::Text, InputType::Image, InputType::Multimodal],
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backends::{BackendRegistry, InputType};
+
+    #[test]
+    fn grpc_backend_is_registered_in_global_slice() {
+        // Act
+        let id = BackendRegistry::lookup_backend_id(GRPC_BACKEND_NAME);
+
+        // Assert
+        assert_eq!(id, Some(GRPC_BACKEND_ID));
+    }
+
+    #[test]
+    fn grpc_lookup_backend_by_id_succeeds() {
+        // Act
+        let result = BackendRegistry::lookup_backend(GRPC_BACKEND_ID);
+
+        // Assert
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn all_registered_models_have_unique_ids() {
+        // Act
+        let ids: Vec<i32> = GRPC_REGISTERED_MODELS.iter().map(|m| m.id()).collect();
+
+        // Assert
+        let unique: std::collections::HashSet<i32> = ids.iter().copied().collect();
+        assert_eq!(ids.len(), unique.len());
+    }
+
+    #[test]
+    fn all_registered_models_have_unique_names() {
+        // Act
+        let names: Vec<&str> = GRPC_REGISTERED_MODELS.iter().map(|m| m.name()).collect();
+
+        // Assert
+        let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
+        assert_eq!(names.len(), unique.len());
+    }
+
+    #[test]
+    fn clip_vit_base_supports_text_image_and_multimodal() {
+        // Act
+        let clip = GRPC_REGISTERED_MODELS
+            .iter()
+            .find(|m| m.name().contains("ViT-B-32"))
+            .expect("CLIP ViT-B-32 not found");
+
+        // Assert
+        assert!(clip.supports_input_type(InputType::Text));
+        assert!(clip.supports_input_type(InputType::Image));
+        assert!(clip.supports_input_type(InputType::Multimodal));
+    }
+
+    #[test]
+    fn text_only_models_do_not_support_image() {
+        // Assert
+        for m in GRPC_REGISTERED_MODELS.iter().filter(|m| {
+            m.supports_input_type(InputType::Text)
+                && !m.name().contains("ViT")
+                && !m.name().contains("clip")
+                && !m.name().contains("siglip")
+        }) {
+            assert!(
+                !m.supports_input_type(InputType::Image),
+                "model {} unexpectedly supports Image",
+                m.name()
+            );
+        }
+    }
+
+    #[cfg(not(feature = "dynamic_model_loading"))]
+    #[test]
+    fn resolve_model_name_succeeds_for_all_registered_models() {
+        // Arrange
+        let backend = BackendRegistry::lookup_backend(GRPC_BACKEND_ID).unwrap();
+
+        // Assert
+        for m in GRPC_REGISTERED_MODELS.iter() {
+            assert!(
+                backend.resolve_model_name(m.id()).is_ok(),
+                "resolve_model_name failed for id {}",
+                m.id()
+            );
+        }
+    }
+
+    #[cfg(not(feature = "dynamic_model_loading"))]
+    #[test]
+    fn resolve_model_name_fails_for_unknown_id() {
+        // Arrange
+        let backend = BackendRegistry::lookup_backend(GRPC_BACKEND_ID).unwrap();
+
+        // Act
+        let result = backend.resolve_model_name(i32::MAX);
+
+        // Assert
+        assert!(result.is_err());
+    }
+}

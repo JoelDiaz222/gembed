@@ -17,13 +17,17 @@ pub static EMBED_ANYTHING_BACKEND_ID: i32 = 2;
 pub static EMBED_ANYTHING_BACKEND_NAME: &str = "embed_anything";
 
 struct ModelDef {
+    #[allow(dead_code)]
     architecture: &'static str,
+    #[allow(dead_code)]
     onnx_model: Option<ONNXModel>,
+    #[allow(dead_code)]
     hf_model_id: Option<&'static str>,
 }
 
 struct ModelRegistration {
     info: ModelInfo,
+    #[allow(dead_code)]
     def: ModelDef,
 }
 
@@ -38,7 +42,6 @@ thread_local! {
 struct EmbedAnythingBackend;
 
 impl EmbedAnythingBackend {
-    #[cfg(not(feature = "dynamic_model_loading"))]
     fn lookup_model_registration(model_id: i32) -> Option<&'static ModelRegistration> {
         EMBED_ANYTHING_REGISTERED_MODELS
             .iter()
@@ -133,7 +136,6 @@ impl Backend for EmbedAnythingBackend {
         }
     }
 
-    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
         EMBED_ANYTHING_REGISTERED_MODELS
             .iter()
@@ -141,7 +143,6 @@ impl Backend for EmbedAnythingBackend {
             .map(|reg| &reg.info)
     }
 
-    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info_by_id(&self, model_id: i32) -> Option<&ModelInfo> {
         Self::lookup_model_registration(model_id).map(|reg| &reg.info)
     }
@@ -346,3 +347,80 @@ static SIGLIP_LARGE_PATCH16_384: ModelRegistration = ModelRegistration {
         hf_model_id: Some("google/siglip-large-patch16-384"),
     },
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backends::{BackendRegistry, InputType};
+
+    #[test]
+    fn embed_anything_backend_is_registered() {
+        // Act
+        let id = BackendRegistry::lookup_backend_id(EMBED_ANYTHING_BACKEND_NAME);
+
+        // Assert
+        assert_eq!(id, Some(EMBED_ANYTHING_BACKEND_ID));
+    }
+
+    #[test]
+    fn all_models_have_unique_ids() {
+        // Act
+        let ids: Vec<i32> = EMBED_ANYTHING_REGISTERED_MODELS
+            .iter()
+            .map(|r| r.info.id())
+            .collect();
+
+        // Assert
+        let unique: std::collections::HashSet<i32> = ids.iter().copied().collect();
+        assert_eq!(ids.len(), unique.len());
+    }
+
+    #[test]
+    fn clip_supports_multimodal_and_directory() {
+        // Act
+        let clip = EMBED_ANYTHING_REGISTERED_MODELS
+            .iter()
+            .find(|m| m.info.name().contains("clip-vit-base"))
+            .expect("CLIP not found");
+
+        // Assert
+        assert!(clip.info.supports_input_type(InputType::Multimodal));
+        assert!(clip.info.supports_input_type(InputType::ImageDirectory));
+    }
+
+    #[test]
+    fn mini_lm_is_text_only() {
+        // Act
+        let mini = EMBED_ANYTHING_REGISTERED_MODELS
+            .iter()
+            .find(|m| m.info.name().contains("all-MiniLM"))
+            .expect("MiniLM not found");
+
+        // Assert
+        assert!(mini.info.supports_input_type(InputType::Text));
+        assert!(!mini.info.supports_input_type(InputType::Image));
+    }
+
+    mod runtime_pool {
+        use super::*;
+
+        #[test]
+        fn runtime_is_initialized_successfully() {
+            // Act
+            let rt = EmbedAnythingBackend::runtime();
+
+            // Assert
+            assert!(rt.is_ok());
+        }
+
+        #[test]
+        fn multiple_calls_return_consistent_runtime() {
+            // Act
+            let rt1 = EmbedAnythingBackend::runtime().unwrap() as *const _;
+            let rt2 = EmbedAnythingBackend::runtime().unwrap() as *const _;
+
+            // Assert
+            assert_eq!(rt1, rt2);
+        }
+    }
+}

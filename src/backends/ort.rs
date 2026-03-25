@@ -65,7 +65,6 @@ thread_local! {
 struct OrtBackend;
 
 impl OrtBackend {
-    #[cfg(not(feature = "dynamic_model_loading"))]
     fn lookup_model_registration(model_id: i32) -> Option<&'static ModelRegistration> {
         ORT_REGISTERED_MODELS
             .iter()
@@ -182,7 +181,6 @@ impl Backend for OrtBackend {
         })
     }
 
-    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
         ORT_REGISTERED_MODELS
             .iter()
@@ -190,7 +188,6 @@ impl Backend for OrtBackend {
             .map(|m| &m.info)
     }
 
-    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info_by_id(&self, model_id: i32) -> Option<&ModelInfo> {
         Self::lookup_model_registration(model_id).map(|reg| &reg.info)
     }
@@ -306,3 +303,126 @@ static SIGLIP_LARGE_PATCH16_384: ModelRegistration = ModelRegistration {
         },
     },
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backends::{BackendRegistry, InputType};
+
+    #[test]
+    fn ort_backend_is_registered() {
+        assert_eq!(
+            BackendRegistry::lookup_backend_id(ORT_BACKEND_NAME),
+            Some(ORT_BACKEND_ID)
+        );
+    }
+
+    #[test]
+    fn all_ort_models_have_unique_ids() {
+        // Act
+        let ids: Vec<i32> = ORT_REGISTERED_MODELS.iter().map(|m| m.info.id()).collect();
+
+        // Assert
+        let unique: std::collections::HashSet<i32> = ids.iter().copied().collect();
+        assert_eq!(ids.len(), unique.len());
+    }
+
+    #[test]
+    fn all_ort_models_have_unique_names() {
+        // Act
+        let names: Vec<&str> = ORT_REGISTERED_MODELS
+            .iter()
+            .map(|m| m.info.name())
+            .collect();
+
+        // Assert
+        let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
+        assert_eq!(names.len(), unique.len());
+    }
+
+    #[test]
+    fn all_ort_models_support_image_input() {
+        // Assert
+        for m in ORT_REGISTERED_MODELS.iter() {
+            assert!(
+                m.info.supports_input_type(InputType::Image),
+                "ORT model {} must support Image",
+                m.info.name()
+            );
+        }
+    }
+
+    #[test]
+    fn clip_models_use_affine_normalization() {
+        // Assert
+        for m in ORT_REGISTERED_MODELS
+            .iter()
+            .filter(|m| m.info.name().contains("clip"))
+        {
+            match &m.def.normalization {
+                Normalization::Affine => {}
+                _ => panic!(
+                    "CLIP model {} should use Affine normalization",
+                    m.info.name()
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn siglip_models_use_mean_std_normalization() {
+        // Assert
+        for m in ORT_REGISTERED_MODELS
+            .iter()
+            .filter(|m| m.info.name().contains("siglip"))
+        {
+            match &m.def.normalization {
+                Normalization::MeanStd { .. } => {}
+                _ => panic!(
+                    "SigLIP model {} should use MeanStd normalization",
+                    m.info.name()
+                ),
+            }
+        }
+    }
+
+    mod preprocess_helper {
+        use super::*;
+        use std::path::Path;
+
+        #[test]
+        fn preprocess_returns_correct_length() {
+            // Arrange
+            let tmp = tempfile::Builder::new().suffix(".png").tempfile().unwrap();
+            let img = image::RgbImage::new(1, 1);
+            img.save(tmp.path()).unwrap();
+
+            let def = ModelDef {
+                image_size: 224,
+                normalization: Normalization::Affine,
+            };
+
+            // Act
+            let result = OrtBackend::preprocess(tmp.path(), &def).unwrap();
+
+            // Assert
+            // 3 channels * 224 * 224
+            assert_eq!(result.len(), 3 * 224 * 224);
+        }
+
+        #[test]
+        fn preprocess_fails_for_missing_file() {
+            // Arrange
+            let def = ModelDef {
+                image_size: 10,
+                normalization: Normalization::Affine,
+            };
+
+            // Act
+            let result = OrtBackend::preprocess(Path::new("__missing__"), &def);
+
+            // Assert
+            assert!(result.is_err());
+        }
+    }
+}

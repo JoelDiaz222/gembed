@@ -65,14 +65,12 @@ impl Backend for HttpBackend {
         }
     }
 
-    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
         HTTP_REGISTERED_MODELS
             .iter()
             .find(|m| m.name() == model_name)
     }
 
-    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info_by_id(&self, model_id: i32) -> Option<&ModelInfo> {
         HTTP_REGISTERED_MODELS.iter().find(|m| m.id() == model_id)
     }
@@ -109,3 +107,113 @@ static ALL_MINI_LM_L6_V2: ModelInfo = ModelInfo::new(
     "sentence-transformers/all-MiniLM-L6-v2",
     &[InputType::Text],
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backends::{BackendRegistry, InputType};
+
+    #[test]
+    fn http_backend_is_registered() {
+        // Act
+        let id = BackendRegistry::lookup_backend_id(HTTP_BACKEND_NAME);
+
+        // Assert
+        assert_eq!(id, Some(HTTP_BACKEND_ID));
+    }
+
+    #[test]
+    fn http_backend_lookup_by_id_succeeds() {
+        // Act
+        let result = BackendRegistry::lookup_backend(HTTP_BACKEND_ID);
+
+        // Assert
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn all_http_models_have_unique_ids() {
+        // Act
+        let ids: Vec<i32> = HTTP_REGISTERED_MODELS.iter().map(|m| m.id()).collect();
+
+        // Assert
+        let unique: std::collections::HashSet<i32> = ids.iter().copied().collect();
+        assert_eq!(ids.len(), unique.len());
+    }
+
+    #[test]
+    fn all_http_models_support_text_input() {
+        // Assert
+        for m in HTTP_REGISTERED_MODELS.iter() {
+            assert!(
+                m.supports_input_type(InputType::Text),
+                "HTTP model {} must support Text",
+                m.name()
+            );
+        }
+    }
+
+    #[test]
+    fn http_backend_supports_text_for_all_registered_models() {
+        // Arrange
+        let backend = BackendRegistry::lookup_backend(HTTP_BACKEND_ID).unwrap();
+
+        // Assert
+        for m in HTTP_REGISTERED_MODELS.iter() {
+            assert!(
+                backend.supports_input_for_model(m.id(), InputType::Text),
+                "supports_input_for_model returned false for {} / Text",
+                m.name()
+            );
+        }
+    }
+
+    #[test]
+    fn http_backend_does_not_support_image_for_any_model() {
+        // Arrange
+        let backend = BackendRegistry::lookup_backend(HTTP_BACKEND_ID).unwrap();
+
+        // Assert
+        for m in HTTP_REGISTERED_MODELS.iter() {
+            assert!(
+                !backend.supports_input_for_model(m.id(), InputType::Image),
+                "HTTP backend should not support Image for {}",
+                m.name()
+            );
+        }
+    }
+
+    #[test]
+    fn http_backend_does_not_support_multimodal() {
+        // Arrange
+        let backend = BackendRegistry::lookup_backend(HTTP_BACKEND_ID).unwrap();
+
+        // Assert
+        for m in HTTP_REGISTERED_MODELS.iter() {
+            assert!(
+                !backend.supports_input_for_model(m.id(), InputType::Multimodal),
+                "HTTP backend should not support Multimodal for {}",
+                m.name()
+            );
+        }
+    }
+
+    #[test]
+    fn http_embed_returns_error_for_image_input() {
+        // Arrange
+        let backend = BackendRegistry::lookup_backend(HTTP_BACKEND_ID).unwrap();
+        let dummy_img: &[u8] = &[0xFF, 0xD8, 0xFF];
+
+        // Act
+        let result = backend.embed(
+            HTTP_REGISTERED_MODELS[0].id(),
+            Input::Images(vec![dummy_img]),
+        );
+
+        // Assert
+        assert!(
+            result.is_err(),
+            "expected error for Image input on HTTP backend"
+        );
+    }
+}

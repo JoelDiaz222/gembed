@@ -11,6 +11,7 @@ pub static FASTEMBED_BACKEND_NAME: &str = "fastembed";
 
 struct ModelRegistration {
     pub info: ModelInfo,
+    #[allow(dead_code)]
     pub embedding_model: EmbeddingModel,
 }
 
@@ -24,7 +25,6 @@ thread_local! {
 struct FastEmbedBackend;
 
 impl FastEmbedBackend {
-    #[cfg(not(feature = "dynamic_model_loading"))]
     fn lookup_model_registration(model_id: i32) -> Option<&'static ModelRegistration> {
         FASTEMBED_REGISTERED_MODELS
             .iter()
@@ -94,7 +94,6 @@ impl Backend for FastEmbedBackend {
         })
     }
 
-    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info(&self, model_name: &str) -> Option<&ModelInfo> {
         FASTEMBED_REGISTERED_MODELS
             .iter()
@@ -102,7 +101,6 @@ impl Backend for FastEmbedBackend {
             .map(|reg| &reg.info)
     }
 
-    #[cfg(not(feature = "dynamic_model_loading"))]
     fn model_info_by_id(&self, model_id: i32) -> Option<&ModelInfo> {
         Self::lookup_model_registration(model_id).map(|reg| &reg.info)
     }
@@ -126,3 +124,147 @@ static BGE_LARGE_EN_V1_5: ModelRegistration = ModelRegistration {
     info: ModelInfo::new(1, "Xenova/bge-large-en-v1.5", &[InputType::Text]),
     embedding_model: EmbeddingModel::BGELargeENV15,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backends::{BackendRegistry, InputType};
+
+    #[test]
+    fn fastembed_backend_is_registered() {
+        // Act
+        let id = BackendRegistry::lookup_backend_id(FASTEMBED_BACKEND_NAME);
+
+        // Assert
+        assert_eq!(id, Some(FASTEMBED_BACKEND_ID));
+    }
+
+    #[test]
+    fn fastembed_lookup_backend_by_id_succeeds() {
+        // Act
+        let b = BackendRegistry::lookup_backend(FASTEMBED_BACKEND_ID);
+
+        // Assert
+        assert!(b.is_some());
+    }
+
+    #[test]
+    fn all_registered_models_have_unique_ids() {
+        // Act
+        let ids: Vec<i32> = FASTEMBED_REGISTERED_MODELS
+            .iter()
+            .map(|r| r.info.id())
+            .collect();
+
+        // Assert
+        let unique: std::collections::HashSet<i32> = ids.iter().copied().collect();
+        assert_eq!(
+            ids.len(),
+            unique.len(),
+            "duplicate model IDs in FASTEMBED_REGISTERED_MODELS"
+        );
+    }
+
+    #[test]
+    fn all_registered_models_have_unique_names() {
+        // Act
+        let names: Vec<&str> = FASTEMBED_REGISTERED_MODELS
+            .iter()
+            .map(|r| r.info.name())
+            .collect();
+
+        // Assert
+        let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
+        assert_eq!(
+            names.len(),
+            unique.len(),
+            "duplicate model names in FASTEMBED_REGISTERED_MODELS"
+        );
+    }
+
+    #[test]
+    fn all_registered_models_support_text_input() {
+        // Assert
+        for reg in FASTEMBED_REGISTERED_MODELS.iter() {
+            assert!(
+                reg.info.supports_input_type(InputType::Text),
+                "model {} must support Text input",
+                reg.info.name()
+            );
+        }
+    }
+
+    #[test]
+    fn no_registered_model_supports_image_input() {
+        // Assert
+        for reg in FASTEMBED_REGISTERED_MODELS.iter() {
+            assert!(
+                !reg.info.supports_input_type(InputType::Image),
+                "model {} should NOT support Image input",
+                reg.info.name()
+            );
+        }
+    }
+
+    #[cfg(not(feature = "dynamic_model_loading"))]
+    #[test]
+    fn model_info_lookup_by_name_succeeds_for_all_models() {
+        // Arrange
+        let backend = BackendRegistry::lookup_backend(FASTEMBED_BACKEND_ID).unwrap();
+
+        // Assert
+        for reg in FASTEMBED_REGISTERED_MODELS.iter() {
+            assert!(
+                backend.model_info(reg.info.name()).is_some(),
+                "model_info returned None for '{}'",
+                reg.info.name()
+            );
+        }
+    }
+
+    #[cfg(not(feature = "dynamic_model_loading"))]
+    #[test]
+    fn model_info_lookup_by_id_succeeds_for_all_models() {
+        // Arrange
+        let backend = BackendRegistry::lookup_backend(FASTEMBED_BACKEND_ID).unwrap();
+
+        // Assert
+        for reg in FASTEMBED_REGISTERED_MODELS.iter() {
+            assert!(
+                backend.model_info_by_id(reg.info.id()).is_some(),
+                "model_info_by_id returned None for id {}",
+                reg.info.id()
+            );
+        }
+    }
+
+    #[test]
+    fn supports_input_for_model_returns_true_for_text() {
+        // Arrange
+        let backend = BackendRegistry::lookup_backend(FASTEMBED_BACKEND_ID).unwrap();
+
+        // Assert
+        for reg in FASTEMBED_REGISTERED_MODELS.iter() {
+            assert!(
+                backend.supports_input_for_model(reg.info.id(), InputType::Text),
+                "model {} should support Text",
+                reg.info.name()
+            );
+        }
+    }
+
+    #[test]
+    fn supports_input_for_model_returns_false_for_image() {
+        // Arrange
+        let backend = BackendRegistry::lookup_backend(FASTEMBED_BACKEND_ID).unwrap();
+
+        // Assert
+        for reg in FASTEMBED_REGISTERED_MODELS.iter() {
+            assert!(
+                !backend.supports_input_for_model(reg.info.id(), InputType::Image),
+                "model {} should NOT support Image",
+                reg.info.name()
+            );
+        }
+    }
+}
