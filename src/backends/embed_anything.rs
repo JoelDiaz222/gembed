@@ -1,7 +1,7 @@
 #![cfg(feature = "embed_anything")]
 use crate::backends::{Backend, Input, InputType, ModelInfo, BACKENDS};
 use crate::utils::{detect_image_format, flatten_vectors};
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use embed_anything::embed_image_directory;
 use embed_anything::embeddings::embed::{Embedder as EABackend, EmbedderBuilder};
 use embed_anything::embeddings::local::text_embedding::ONNXModel;
@@ -13,8 +13,8 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
-pub static EMBED_ANYTHING_BACKEND_ID: i32 = 2;
-pub static EMBED_ANYTHING_BACKEND_NAME: &str = "embed_anything";
+static EMBED_ANYTHING_BACKEND_ID: i32 = 2;
+static EMBED_ANYTHING_BACKEND_NAME: &str = "embed_anything";
 
 struct ModelDef {
     #[allow(dead_code)]
@@ -32,7 +32,7 @@ struct ModelRegistration {
 }
 
 #[distributed_slice]
-pub static EMBED_ANYTHING_REGISTERED_MODELS: [ModelRegistration] = [..];
+static EMBED_ANYTHING_REGISTERED_MODELS: [ModelRegistration] = [..];
 
 thread_local! {
     static RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) };
@@ -84,7 +84,7 @@ impl EmbedAnythingBackend {
             } else if let Some(hf_id) = model_def.hf_model_id {
                 builder.model_id(Some(hf_id)).from_pretrained_hf()?
             } else {
-                bail!("No model configuration found");
+                anyhow::bail!("No model configuration found");
             };
 
             let arc_backend = Arc::new(backend);

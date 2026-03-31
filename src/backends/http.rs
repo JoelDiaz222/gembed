@@ -8,11 +8,11 @@ use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use std::time::Duration;
 
-pub static HTTP_BACKEND_ID: i32 = 3;
-pub static HTTP_BACKEND_NAME: &str = "http";
+static HTTP_BACKEND_ID: i32 = 3;
+static HTTP_BACKEND_NAME: &str = "http";
 
 #[distributed_slice]
-pub static HTTP_REGISTERED_MODELS: [ModelInfo] = [..];
+static HTTP_REGISTERED_MODELS: [ModelInfo] = [..];
 
 static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
     Client::builder()

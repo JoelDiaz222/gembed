@@ -19,17 +19,20 @@ use std::num::NonZeroUsize;
 use std::sync::LazyLock;
 
 #[cfg(feature = "dynamic_model_loading")]
+static DEFAULT_DYNAMIC_MODEL_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(32).unwrap();
+
+#[cfg(feature = "dynamic_model_loading")]
 struct DynamicModelCache {
-    id_to_name: LruCache<i32, String>,
     name_to_id: LruCache<String, i32>,
+    id_to_name: LruCache<i32, String>,
 }
 
 #[cfg(feature = "dynamic_model_loading")]
 impl DynamicModelCache {
     fn new() -> Self {
         Self {
-            id_to_name: LruCache::new(NonZeroUsize::new(32).unwrap()),
-            name_to_id: LruCache::new(NonZeroUsize::new(32).unwrap()),
+            name_to_id: LruCache::new(DEFAULT_DYNAMIC_MODEL_CACHE_SIZE),
+            id_to_name: LruCache::new(DEFAULT_DYNAMIC_MODEL_CACHE_SIZE),
         }
     }
 
@@ -188,12 +191,12 @@ impl BackendRegistry {
             // to ensure we respect their input type constraints and unique IDs.
             if let Some(backend) = Self::lookup_backend(_backend_id) {
                 if let Some(model_info) = backend.model_info(model_name) {
-                    if model_info.supports_input_type(_input_type) {
-                        return Some(model_info.id());
+                    return if model_info.supports_input_type(_input_type) {
+                        Some(model_info.id())
                     } else {
                         // The model name is explicitly registered but doesn't support the requested type.
-                        return None;
-                    }
+                        None
+                    };
                 }
             }
 

@@ -17,11 +17,11 @@ pub mod tei {
     }
 }
 
-pub static GRPC_BACKEND_ID: i32 = 1;
-pub static GRPC_BACKEND_NAME: &str = "grpc";
+static GRPC_BACKEND_ID: i32 = 1;
+static GRPC_BACKEND_NAME: &str = "grpc";
 
 #[distributed_slice]
-pub static GRPC_REGISTERED_MODELS: [ModelInfo] = [..];
+static GRPC_REGISTERED_MODELS: [ModelInfo] = [..];
 
 static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_current_thread()

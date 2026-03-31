@@ -31,8 +31,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-pub static ORT_BACKEND_ID: i32 = 4;
-pub static ORT_BACKEND_NAME: &str = "ort";
+static ORT_BACKEND_ID: i32 = 4;
+static ORT_BACKEND_NAME: &str = "ort";
 
 const DEFAULT_MODEL_BASE_DIR: &str = "/path/to/onnx_models";
 
@@ -56,7 +56,7 @@ struct ModelRegistration {
 }
 
 #[distributed_slice]
-pub static ORT_REGISTERED_MODELS: [ModelRegistration] = [..];
+static ORT_REGISTERED_MODELS: [ModelRegistration] = [..];
 
 thread_local! {
     static ORT_SESSIONS: RefCell<HashMap<i32, Session>> = RefCell::new(HashMap::new());

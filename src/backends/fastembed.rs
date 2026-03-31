@@ -1,13 +1,12 @@
 #![cfg(feature = "fastembed")]
 use crate::backends::{Backend, Input, InputType, ModelInfo, BACKENDS};
-use crate::utils::flatten_vectors;
 use anyhow::{bail, Result};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use linkme::distributed_slice;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 
-pub static FASTEMBED_BACKEND_ID: i32 = 0;
-pub static FASTEMBED_BACKEND_NAME: &str = "fastembed";
+static FASTEMBED_BACKEND_ID: i32 = 0;
+static FASTEMBED_BACKEND_NAME: &str = "fastembed";
 
 struct ModelRegistration {
     pub info: ModelInfo,
@@ -16,7 +15,7 @@ struct ModelRegistration {
 }
 
 #[distributed_slice]
-pub static FASTEMBED_REGISTERED_MODELS: [ModelRegistration] = [..];
+static FASTEMBED_REGISTERED_MODELS: [ModelRegistration] = [..];
 
 thread_local! {
     static FASTEMBED_MODELS: RefCell<HashMap<i32, TextEmbedding>> = RefCell::new(HashMap::new());
@@ -64,7 +63,7 @@ impl Backend for FastEmbedBackend {
                 .expect("Failed to initialize model")
             });
             let embeddings = model_instance.embed(text_slices, None)?;
-            flatten_vectors(embeddings)
+            crate::utils::flatten_vectors(embeddings)
         })
     }
 
