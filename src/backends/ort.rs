@@ -9,7 +9,7 @@
 //    sudo ln -s /usr/local/lib/libonnxruntime.so.1.24.3 /usr/local/lib/libonnxruntime.so
 //    sudo ldconfig
 //
-// The database adapters need to link against this dynamic library. For example:
+// The DBMS adapters need to link against this dynamic library. For example:
 //     ORT_LIB_DIR = /usr/local/lib
 //
 //    SHLIB_LINK = \
