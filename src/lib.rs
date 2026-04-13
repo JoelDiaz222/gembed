@@ -1,5 +1,8 @@
 mod backends;
+mod telemetry;
 mod utils;
+
+use telemetry::tlog;
 
 use crate::backends::{BackendRegistry, InputType};
 use crate::utils::{
@@ -95,7 +98,11 @@ pub extern "C" fn generate_embeddings(
             Err(value) => return value,
         };
 
+        tlog("rs_pre_embed", input_data.n_texts);
+
         let result = backend.embed(model_id, input);
+
+        tlog("rs_post_embed", 0);
 
         let (mut flat, n_vectors, dim) = match result {
             Ok((flat, n_vectors, dim)) if n_vectors > 0 && !flat.is_empty() => {

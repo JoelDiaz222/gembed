@@ -1,5 +1,6 @@
 #![cfg(feature = "embed_anything")]
 use crate::backends::{Backend, Input, InputType, ModelInfo, BACKENDS};
+use crate::telemetry::tlog;
 use crate::utils::{detect_image_format, flatten_vectors};
 use anyhow::{anyhow, Result};
 use embed_anything::embed_image_directory;
@@ -71,8 +72,11 @@ impl EmbedAnythingBackend {
         EMBED_ANYTHING_MODELS.with(|cell| {
             let mut models = cell.borrow_mut();
             if let Some(backend) = models.get(&model_id) {
+                tlog("rs_ea_model_cache_hit", 0);
                 return Ok(Arc::clone(backend));
             }
+
+            tlog("rs_ea_model_load_start", 0);
 
             let model_def = &registration.def;
             let builder = EmbedderBuilder::new().model_architecture(model_def.architecture);
@@ -86,6 +90,8 @@ impl EmbedAnythingBackend {
             } else {
                 anyhow::bail!("No model configuration found");
             };
+
+            tlog("rs_ea_model_load_done", 0);
 
             let arc_backend = Arc::new(backend);
             models.insert(model_id, Arc::clone(&arc_backend));
@@ -178,7 +184,11 @@ fn embed_texts(
     backend: &Arc<EABackend>,
     runtime: &Runtime,
 ) -> Result<(Vec<f32>, usize, usize)> {
+    tlog("rs_ea_embed_texts_start", texts.len());
+
     let result = runtime.block_on(backend.embed(&texts, None, None))?;
+
+    tlog("rs_ea_embed_texts_done", texts.len());
 
     let vectors: Vec<Vec<f32>> = result
         .into_iter()
