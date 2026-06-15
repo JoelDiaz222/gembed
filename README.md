@@ -31,6 +31,15 @@ trait.
 | `grpc` | gRPC | Remote inference via gRPC    |
 | `http` | HTTP | Remote inference via HTTP    |
 
+### Adding a Backend
+
+To add a new backend:
+
+1. Add its dependencies to `Cargo.toml`, optionally behind a new feature flag.
+2. Create its source code under `src/backends/`, implementing the common `Backend` trait.
+3. Register it at link time using the `linkme` distributed-slice pattern, so it is automatically discovered by the Core.
+4. Recompile, enabling the corresponding feature flag if one was added (e.g., `cargo build --release --features "new_backend"`).
+
 ## Build
 
 ```bash
